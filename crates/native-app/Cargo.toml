@@ -40,3 +40,8 @@ muda = { version = "0.20", default-features = false }
 # file as an eframe dependency). default-features off: text only, skips the
 # image-data feature's extra image/graphics crates.
 arboard = { version = "3.6", default-features = false }
+# Already in Cargo.lock via eframe/winit. Used to schedule `-[NSApplication terminate:]`
+# on window close (R-01 M2) so AccessKit does not re-class WinitView under KVO.
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }

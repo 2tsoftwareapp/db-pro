@@ -314,6 +314,7 @@ impl eframe::App for CaptureApp {
         if std::env::var_os("DB_PRO_CAPTURE_QUERY_CONTEXT_PICKER").is_some() {
             self.inner.open_query_context_picker_for_capture();
         }
+        super::macos_quit::on_macos_window_close(ctx);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();

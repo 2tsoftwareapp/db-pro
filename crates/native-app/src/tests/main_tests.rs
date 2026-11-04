@@ -301,3 +301,78 @@ fn sample_seed_rejects_symlink_without_touching_target() {
 
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// R-01 M2: window close on macOS must be `-[NSApplication terminate:]`, never
+/// `process::exit` (that skips `App::save`). Linux-compilable contract test.
+#[test]
+fn macos_close_uses_terminate_not_process_exit() {
+    assert!(
+        macos_close_uses_terminate(),
+        "macOS window close must map to NSApp terminate"
+    );
+    let src = include_str!("../macos_quit.rs");
+    assert!(
+        !src.contains("process::exit"),
+        "R-01 forbids process::exit on the macOS quit path"
+    );
+    assert!(src.contains("terminate"), "close helper must invoke NSApp terminate");
+}
+
+/// Close-button / Cmd+W / ViewportCommand::Close: cancel eframe teardown and
+/// take the platform quit (terminate), matching craft-quit's proven M2 shape.
+#[test]
+fn macos_close_request_cancels_window_teardown_for_terminate() {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+
+    let mut taken = false;
+    let mut quit_calls = 0u32;
+    let mut out = ctx.run_logic(&input, |ctx| {
+        taken = take_over_macos_close(ctx, || {
+            quit_calls += 1;
+            macos_close_uses_terminate()
+        });
+    });
+    let commands = out
+        .viewport_commands
+        .remove(&egui::ViewportId::ROOT)
+        .unwrap_or_default();
+
+    assert!(taken, "close request must be taken over by the terminate path");
+    assert_eq!(quit_calls, 1);
+    assert!(
+        commands.contains(&egui::ViewportCommand::CancelClose),
+        "eframe must not destroy the window; NSApp terminate runs App::save first"
+    );
+}
+
+#[test]
+fn macos_close_respects_cancel_close_already_queued() {
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input
+        .viewports
+        .entry(egui::ViewportId::ROOT)
+        .or_default()
+        .events
+        .push(egui::ViewportEvent::Close);
+
+    let mut taken = false;
+    let mut quit_calls = 0u32;
+    let _ = ctx.run_logic(&input, |ctx| {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        taken = take_over_macos_close(ctx, || {
+            quit_calls += 1;
+            true
+        });
+    });
+
+    assert!(!taken);
+    assert_eq!(quit_calls, 0, "CancelClose must skip terminate");
+}

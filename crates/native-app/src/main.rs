@@ -21,12 +21,15 @@ use tokio::runtime::Builder;
 mod app_menu;
 #[cfg(feature = "capture")]
 mod capture;
+mod macos_quit;
 mod table_copy_port;
 mod translate;
 #[cfg(test)]
 #[path = "tests/translate_tests.rs"]
 mod translate_tests;
 
+#[cfg(test)]
+pub(crate) use macos_quit::{macos_close_uses_terminate, take_over_macos_close};
 #[cfg(test)]
 pub(crate) use translate::draft_to_domain;
 use translate::{translate_command, translate_event};
@@ -666,6 +669,7 @@ impl eframe::App for NativeMenuApp {
     }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         eframe::App::logic(&mut self.inner, ctx, frame);
+        macos_quit::on_macos_window_close(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
