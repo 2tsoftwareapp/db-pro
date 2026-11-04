@@ -28,7 +28,7 @@ pub fn transaction_control(sql: &str) -> Option<TransactionControl> {
         ["rollback"] | ["rollback", "work"] | ["rollback", "transaction"] | ["abort"] | ["abort", "work"] => {
             Some(TransactionControl::Rollback)
         }
-        ["begin", _, ..] => Some(TransactionControl::Begin),
+        ["begin", _, ..] | ["start", "transaction", _, ..] => Some(TransactionControl::Begin),
         _ => None,
     }
 }
