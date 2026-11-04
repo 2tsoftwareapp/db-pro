@@ -11,6 +11,7 @@ use db_pro_core::domain::query::{CellValue, QueryParam};
 use db_pro_core::ports::{
     DbConnector, ParameterizedTransactionStatement, TransactionFailureOutcome, TransactionFailurePhase,
 };
+use db_pro_infrastructure::sqlite::actor::SqliteActor;
 use db_pro_infrastructure::sqlite::connector::SQLiteConnector;
 use std::sync::Arc;
 
@@ -202,42 +203,26 @@ async fn test_connection_succeeds() {
 
 #[tokio::test]
 async fn sqlite_query_timeout_interrupts_vm_and_actor_recovers() {
-    let connector = SQLiteConnector::new();
-    let config = ConnectionConfig {
-        name: "timeout-test".into(),
-        host: String::new(),
-        port: 0,
-        database: ":memory:".into(),
-        username: String::new(),
-        driver: DriverType::SQLite,
-        ssl_mode: SslMode::Disable,
-        ssh_tunnel: None,
-        ssh_profile_id: None,
-        ssl_root_cert_path: None,
-        ssl_client_cert_path: None,
-        ssl_client_key_path: None,
-        query_timeout_ms: 1,
-        max_rows: 100,
-        color: None,
-        tags: vec![],
-        group: None,
-        favorite: false,
-        environment: Default::default(),
-        readonly: false,
-    };
-    let handle = connector.connect(&config, "").await.unwrap();
+    // The connector applies one timeout to every query. Use its underlying actor
+    // API to isolate the short interrupt deadline from the recovery assertion.
+    let actor = SqliteActor::spawn(":memory:").expect("in-memory actor should spawn");
 
     let query = "WITH RECURSIVE numbers(value) AS (\
         SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 100000\
     ) SELECT count(*) FROM numbers first_numbers CROSS JOIN numbers second_numbers";
-    let error = connector
-        .query(&handle, query, &[])
+    let error = actor
+        .execute(query.into(), vec![], 100, 1)
         .await
         .expect_err("the deliberately expensive query should time out");
     assert!(matches!(error, DbError::QueryTimeout { timeout_ms: 1 }));
 
-    let recovery = connector.query(&handle, "SELECT 1", &[]).await.unwrap();
+    let recovery = actor
+        .execute("SELECT 1".into(), vec![], 100, 30_000)
+        .await
+        .expect("the same actor should serve queries after the interrupted VM exits");
     assert_eq!(recovery.row_count, 1);
+    assert!(matches!(recovery.rows[0].0[0], CellValue::Int64(1)));
+    actor.shutdown().await;
 }
 
 #[tokio::test]
