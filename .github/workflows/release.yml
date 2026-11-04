@@ -318,12 +318,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.candidate_sha }}
-          # Historical run evidence contains ':' paths invalid on Windows.
-          # Keep every other tracked input, including embedded assets and fixtures.
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /*
-            !/docs/plans/active/release-qualification-matrix/runs/
 
       - name: Verify and report candidate SHA
         shell: bash
@@ -465,11 +459,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.resolve.outputs.candidate_sha }}
-          # Match the build checkout: omit historical run evidence, retain scripts/licenses.
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /*
-            !/docs/plans/active/release-qualification-matrix/runs/
 
       - name: Download build output
         uses: actions/download-artifact@v4
