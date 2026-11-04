@@ -1061,7 +1061,11 @@ async fn assert_interrupted_joined_run_is_discarded(interruption: JoinedRunInter
         .await
         .expect("create interrupted-run fixture");
     connector
-        .execute(&handle, &format!("INSERT INTO {table} VALUES ('locked', 'original')"), &[])
+        .execute(
+            &handle,
+            &format!("INSERT INTO {table} VALUES ('locked', 'original')"),
+            &[],
+        )
         .await
         .expect("seed the row used to block the second joined statement");
 
@@ -1073,9 +1077,16 @@ async fn assert_interrupted_joined_run_is_discarded(interruption: JoinedRunInter
         .expect("hold a row lock until after the joined future finishes");
 
     with_query_session(Some("mysql-interrupted-join-tab"), async {
-        connector.execute(&handle, "BEGIN", &[]).await.expect("open tab transaction");
         connector
-            .execute(&handle, &format!("INSERT INTO {table} VALUES ('tab', 'prior work')"), &[])
+            .execute(&handle, "BEGIN", &[])
+            .await
+            .expect("open tab transaction");
+        connector
+            .execute(
+                &handle,
+                &format!("INSERT INTO {table} VALUES ('tab', 'prior work')"),
+                &[],
+            )
             .await
             .expect("write prior tab work");
         let connection_id = connector
@@ -1089,7 +1100,10 @@ async fn assert_interrupted_joined_run_is_discarded(interruption: JoinedRunInter
         let statements = [
             ParameterizedTransactionStatement {
                 sql: format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
-                params: vec![QueryParam::Text("joined".into()), QueryParam::Text("partial write".into())],
+                params: vec![
+                    QueryParam::Text("joined".into()),
+                    QueryParam::Text("partial write".into()),
+                ],
                 expect_affected_rows: true,
                 max_affected_rows: Some(1),
             },
@@ -1138,7 +1152,11 @@ async fn assert_interrupted_joined_run_is_discarded(interruption: JoinedRunInter
                 .expect_err("the blocked joined statement must time out");
                 assert_eq!(failure.phase, TransactionFailurePhase::Statement);
                 assert_eq!(failure.statement_index, 1);
-                assert_eq!(failure.results.len(), 1, "the partial write must run before the timeout");
+                assert_eq!(
+                    failure.results.len(),
+                    1,
+                    "the partial write must run before the timeout"
+                );
                 assert_eq!(failure.outcome, TransactionFailureOutcome::Unknown);
                 assert!(
                     failure.error.to_string().contains("savepoint cleanup timed out"),
