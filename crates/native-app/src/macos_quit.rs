@@ -13,11 +13,6 @@
 
 use eframe::egui::{Context, ViewportCommand, ViewportId};
 
-/// Production close mapping for macOS: NSApp terminate, not a forced process abort.
-pub(crate) fn macos_close_uses_terminate() -> bool {
-    true
-}
-
 /// Call at the end of `eframe::App::logic`. When the root window was asked to
 /// close and `quit` takes the platform path, cancel eframe teardown so the
 /// window stays until AppKit terminates.
@@ -42,7 +37,7 @@ pub(crate) fn on_macos_window_close(ctx: &Context) {
         #[cfg(target_os = "macos")]
         {
             schedule_nsapp_terminate();
-            macos_close_uses_terminate()
+            true
         }
         #[cfg(not(target_os = "macos"))]
         {

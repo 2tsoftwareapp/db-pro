@@ -306,6 +306,10 @@ fn take_screenshot(ctx: &egui::Context) -> Option<std::sync::Arc<egui::ColorImag
 }
 
 impl eframe::App for CaptureApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.inner.save(storage);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         eframe::App::logic(&mut self.inner, ctx, frame);
         // The picker fixture seeds/clears catalog data, so it must land *after* the
@@ -621,5 +625,59 @@ impl CaptureApp {
         // The app repaints on demand, so without this the settle count would stall
         // on an idle frame and the screenshot would never be requested.
         ctx.request_repaint();
+    }
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+mod capture_save_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[derive(Default)]
+    struct MemoryStorage(HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    fn capture_app() -> CaptureApp {
+        CaptureApp {
+            inner: DbProApp::default(),
+            path: PathBuf::new(),
+            settle: 0,
+            frames: 0,
+            requested_at: None,
+            opened_dialog: false,
+            prepared_loading: false,
+            pinned: None,
+            audit: false,
+            audit_done: false,
+            #[cfg(debug_assertions)]
+            pending_review: None,
+        }
+    }
+
+    #[test]
+    fn capture_app_save_forwards_theme_and_query_history() {
+        let mut app = capture_app();
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(&mut app, &mut storage);
+        assert!(
+            storage.0.contains_key("dbpro.native.dark-mode"),
+            "CaptureApp::save must forward to DbProApp so capture Close persists theme"
+        );
+        assert!(
+            storage.0.contains_key("dbpro.native.query-history-v1"),
+            "CaptureApp::save must forward query history"
+        );
     }
 }

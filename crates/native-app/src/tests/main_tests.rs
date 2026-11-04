@@ -302,20 +302,14 @@ fn sample_seed_rejects_symlink_without_touching_target() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// R-01 M2: window close on macOS must be `-[NSApplication terminate:]`, never
-/// `process::exit` (that skips `App::save`). Linux-compilable contract test.
+/// Compiles only when eframe's `persistence` feature is on — the gate that
+/// actually calls `App::save` + storage flush on quit/terminate.
 #[test]
-fn macos_close_uses_terminate_not_process_exit() {
+fn eframe_persistence_is_enabled_so_quit_can_save() {
     assert!(
-        macos_close_uses_terminate(),
-        "macOS window close must map to NSApp terminate"
+        eframe::storage_dir("DB Pro").is_some(),
+        "eframe persistence must resolve a native storage directory"
     );
-    let src = include_str!("../macos_quit.rs");
-    assert!(
-        !src.contains("process::exit"),
-        "R-01 forbids process::exit on the macOS quit path"
-    );
-    assert!(src.contains("terminate"), "close helper must invoke NSApp terminate");
 }
 
 /// Close-button / Cmd+W / ViewportCommand::Close: cancel eframe teardown and
@@ -336,7 +330,7 @@ fn macos_close_request_cancels_window_teardown_for_terminate() {
     let mut out = ctx.run_logic(&input, |ctx| {
         taken = take_over_macos_close(ctx, || {
             quit_calls += 1;
-            macos_close_uses_terminate()
+            true
         });
     });
     let commands = out

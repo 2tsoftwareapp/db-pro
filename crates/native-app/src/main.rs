@@ -29,7 +29,7 @@ mod translate;
 mod translate_tests;
 
 #[cfg(test)]
-pub(crate) use macos_quit::{macos_close_uses_terminate, take_over_macos_close};
+pub(crate) use macos_quit::take_over_macos_close;
 #[cfg(test)]
 pub(crate) use translate::draft_to_domain;
 use translate::{translate_command, translate_event};
