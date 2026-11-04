@@ -168,6 +168,9 @@ impl MySqlConnector {
     ) -> Result<Vec<db_pro_core::ports::TransactionStatementResult>, db_pro_core::ports::TransactionFailure> {
         use db_pro_core::ports::{TransactionFailureOutcome, TransactionStatementResult};
 
+        // Until a savepoint boundary is confirmed, cancellation must close the
+        // connection rather than let a later tab COMMIT persist partial writes.
+        lease.discard_if_abandoned();
         let result = {
             let conn = std::ops::DerefMut::deref_mut(lease.conn());
             let connection_id = match sqlx::query_scalar::<_, u64>("SELECT CONNECTION_ID()")
@@ -176,7 +179,7 @@ impl MySqlConnector {
             {
                 Ok(connection_id) => connection_id,
                 Err(error) => {
-                    return Err(boundary_left_open(DbError::QueryFailed(format!(
+                    return Err(boundary_unknown(DbError::QueryFailed(format!(
                         "MySQL connection id failed: {error}"
                     ))));
                 }
@@ -184,7 +187,7 @@ impl MySqlConnector {
             let _active = self.track_guard(handle.0, connection_id);
             let savepoint = crate::transaction_session::savepoint_name();
             if let Err(error) = mysql_text_execute(&mut *conn, &format!("SAVEPOINT {savepoint}")).await {
-                return Err(boundary_left_open(DbError::QueryFailed(format!(
+                return Err(boundary_unknown(DbError::QueryFailed(format!(
                     "MySQL SAVEPOINT failed: {error}"
                 ))));
             }
@@ -250,33 +253,50 @@ impl MySqlConnector {
                 });
             }
             if let Some(mut failure) = failure {
-                let rollback = mysql_text_execute(&mut *conn, &format!("ROLLBACK TO SAVEPOINT {savepoint}")).await;
-                if let Err(rollback_error) = rollback {
-                    failure.outcome = TransactionFailureOutcome::Unknown;
-                    failure.error = DbError::Internal(format!(
-                        "{}; savepoint rollback failed: {rollback_error}",
-                        failure.error
-                    ));
-                    lease.discard_if_abandoned();
-                    return Err(failure);
-                }
-                if let Err(release_error) =
-                    mysql_text_execute(&mut *conn, &format!("RELEASE SAVEPOINT {savepoint}")).await
-                {
-                    failure.error =
-                        DbError::Internal(format!("{}; savepoint release failed: {release_error}", failure.error));
-                }
+                // A timed-out statement can still be running on the server. Give
+                // rollback and release one bounded budget, including draining its response.
+                let cleanup = tokio::time::timeout(timeout, async {
+                    mysql_text_execute(&mut *conn, &format!("ROLLBACK TO SAVEPOINT {savepoint}"))
+                        .await
+                        .map_err(|error| format!("savepoint rollback failed: {error}"))?;
+                    mysql_text_execute(&mut *conn, &format!("RELEASE SAVEPOINT {savepoint}"))
+                        .await
+                        .map_err(|error| format!("savepoint release failed: {error}"))?;
+                    Ok::<(), String>(())
+                })
+                .await;
+                let cleanup_error = match cleanup {
+                    Ok(Ok(())) => {
+                        lease.allow_reuse();
+                        return Err(failure);
+                    }
+                    Ok(Err(error)) => error,
+                    Err(_) => format!("savepoint cleanup timed out after {} ms", timeout.as_millis()),
+                };
+                failure.outcome = TransactionFailureOutcome::Unknown;
+                failure.error = DbError::Internal(format!("{}; {cleanup_error}; connection discarded", failure.error));
                 return Err(failure);
             }
-            if let Err(error) = mysql_text_execute(&mut *conn, &format!("RELEASE SAVEPOINT {savepoint}")).await {
-                return Err(left_open(
-                    statements.len(),
-                    results,
-                    DbError::QueryFailed(format!("MySQL RELEASE SAVEPOINT failed: {error}")),
-                ));
+            let release = tokio::time::timeout(
+                timeout,
+                mysql_text_execute(&mut *conn, &format!("RELEASE SAVEPOINT {savepoint}")),
+            )
+            .await;
+            let release_error = match release {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(DbError::QueryFailed(format!("MySQL RELEASE SAVEPOINT failed: {error}"))),
+                Err(_) => Some(DbError::QueryTimeout {
+                    timeout_ms: timeout.as_millis() as u64,
+                }),
+            };
+            if let Some(error) = release_error {
+                let mut failure = left_open(statements.len(), results, error);
+                failure.outcome = TransactionFailureOutcome::Unknown;
+                return Err(failure);
             }
             Ok(results)
         };
+        lease.allow_reuse();
         lease.succeed();
         result
     }
@@ -942,11 +962,11 @@ fn left_open(
     }
 }
 
-fn boundary_left_open(error: DbError) -> db_pro_core::ports::TransactionFailure {
+fn boundary_unknown(error: DbError) -> db_pro_core::ports::TransactionFailure {
     db_pro_core::ports::TransactionFailure {
         phase: db_pro_core::ports::TransactionFailurePhase::Begin,
         statement_index: 0,
-        outcome: db_pro_core::ports::TransactionFailureOutcome::LeftOpen,
+        outcome: db_pro_core::ports::TransactionFailureOutcome::Unknown,
         results: Vec::new(),
         error,
     }
