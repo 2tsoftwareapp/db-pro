@@ -158,3 +158,18 @@ jobs:
 
       - name: cargo build native app (release)
         run: cargo build --release --locked -p db-pro-native
+
+  macos-compile:
+    name: macos-compile
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      - name: cargo build db-pro-native
+        run: cargo build --locked -p db-pro-native --all-targets
+
