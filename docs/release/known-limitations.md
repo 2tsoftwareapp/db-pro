@@ -39,19 +39,19 @@ Each entry includes:
 
 ---
 
-## LIM-001: Public name unresolved
+## LIM-001: Public name retained (HD-009)
 
 | Field | Value |
 |---|---|
 | Category | brand |
 | Actual behavior | App is named "DB Pro" with identifier `com.dbpro.app`; name collision with existing dbpro.app product |
-| User-visible impact | Public release under current name carries legal/branding risk |
-| Reason | Name decision pending (#101, #104); competitive research (#137-#141) informs the decision |
-| Status | Blocked decision |
+| User-visible impact | Public release ships as DB Pro. Brand collision with dbpro.app remains an accepted risk (HD-009). |
+| Reason | HD-009 (decided 2026-09-16): retain DB Pro. No source rename, storage migration, or repository rename. |
+| Status | Accepted v0.1 |
 | Target issue | #101, #104 |
-| Safe release-note wording | "DB Pro (working title)" or omit product name |
-| Must not contradict | README, app title bar, installer metadata, website |
-| Evidence | #137 dbpro.app teardown; native literals `with_title("DB Pro")` in `crates/native-app/src/main.rs` (three occurrences, no icon resource and no `Info.plist` in-repo — the packaging script generates a minimal plist). Register: `R001` (disposition `DEFERRED`) |
+| Safe release-note wording | "DB Pro" |
+| Must not contradict | README, app title bar, installer metadata, website (identity is DB Pro) |
+| Evidence | HD-009 retain DB Pro. Native literals `with_title("DB Pro")` in `crates/native-app/src/main.rs`. Register: `R001`. |
 
 ## LIM-002: PostgreSQL, SQLite, and a post-v0.1 MySQL 8 provider
 
@@ -361,8 +361,8 @@ enabled UI driver card, and the service-level features that remain PostgreSQL-on
 
 | Status | Count | IDs |
 |---|---|---|
-| Accepted v0.1 | 15 | LIM-002, LIM-003, LIM-005, LIM-006, LIM-007, LIM-011, LIM-013, LIM-014, LIM-015, LIM-016, LIM-017, LIM-018, LIM-019, LIM-020, LIM-022 |
-| Blocked decision | 3 | LIM-001, LIM-009, LIM-010 |
+| Accepted v0.1 | 16 | LIM-001, LIM-002, LIM-003, LIM-005, LIM-006, LIM-007, LIM-011, LIM-013, LIM-014, LIM-015, LIM-016, LIM-017, LIM-018, LIM-019, LIM-020, LIM-022 |
+| Blocked decision | 2 | LIM-009, LIM-010 |
 | Deferred v0.2+ | 3 | LIM-004, LIM-008, LIM-012 |
 | Fix before v0.1 | 1 | LIM-021 |
 
