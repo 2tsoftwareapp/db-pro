@@ -26,6 +26,9 @@ All notable user-facing changes to DB Pro. The shipped application is the native
 - PostgreSQL parameterized reads prepare using actual converted argument types before describing
   metadata, fixing INTEGER-key reloads with Int64 values while preserving contextual NULL inference,
   empty-result metadata and capped-query completion without draining an unused slow tail (#533).
+- MySQL parameterized runs joined to a tab transaction discard the connection when abandoned or
+  savepoint cleanup cannot be confirmed, preventing a later COMMIT from persisting partial writes.
+  Rollback and savepoint release now share a bounded cleanup timeout.
 
 ## [0.1.0] - 2026-09-14
 

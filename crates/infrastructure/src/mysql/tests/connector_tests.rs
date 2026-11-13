@@ -65,6 +65,74 @@ fn execute_parameterized_transaction_publishes_connection_id_before_statements()
 }
 
 #[tokio::test]
+async fn execute_parameterized_transaction_unconnected_handle_fails_validation() {
+    let connector = MySqlConnector::new();
+    let failure = connector
+        .execute_parameterized_transaction(&ConnectionHandle::new(99), &[])
+        .await
+        .expect_err("unconnected handle must return failure");
+    assert_eq!(failure.phase, TransactionFailurePhase::Validation);
+    assert_eq!(failure.outcome, TransactionFailureOutcome::NotStarted);
+}
+
+#[test]
+fn execute_parameterized_transaction_dispatches_joined_lease_before_pool_begin() {
+    let source = include_str!("../connector.rs");
+    let start = source
+        .find("async fn execute_parameterized_transaction(")
+        .expect("owned execute_parameterized_transaction");
+    let rest = &source[start..];
+    let end = rest.find("\n    async fn introspect(").expect("introspect follows");
+    let body = &rest[..end];
+    let checkout = body
+        .find("checkout_if_held")
+        .expect("joined path checks out the tab lease");
+    let joined = body
+        .find("execute_parameterized_transaction_joined")
+        .expect("joined savepoint path");
+    let begin = body.find("pool.begin()").expect("standalone begin remains");
+    assert!(checkout < joined && joined < begin);
+}
+
+#[test]
+fn parameterized_joined_savepoints_use_text_protocol_not_prepared_query() {
+    let source = include_str!("../connector.rs");
+    let start = source
+        .find("async fn execute_parameterized_transaction_joined(")
+        .expect("joined parameterized transaction");
+    let rest = &source[start..];
+    let end = rest.find("\n    fn untrack_connection(").expect("untrack follows");
+    let body = &rest[..end];
+    assert!(
+        body.contains("crate::transaction_session::savepoint_name()"),
+        "savepoint names are generated, never taken from input"
+    );
+    assert!(
+        body.contains("mysql_text_execute"),
+        "SAVEPOINT/ROLLBACK/RELEASE must use the COM_QUERY helper"
+    );
+    assert!(
+        !body.contains("sqlx::query(&format!(\"SAVEPOINT") && !body.contains("sqlx::query(\"SAVEPOINT"),
+        "prepared sqlx::query SAVEPOINT is ERROR 1295 on MySQL"
+    );
+    assert!(body.contains("ROLLBACK TO SAVEPOINT"));
+    assert!(body.contains("RELEASE SAVEPOINT"));
+    assert!(body.contains("discard_if_abandoned"));
+    assert!(body.contains("lease.succeed()"));
+}
+
+#[test]
+fn mysql_text_execute_uses_raw_sql_not_prepared_query() {
+    let source = include_str!("../connector.rs");
+    let start = source.find("fn mysql_text_execute<").expect("text-protocol helper");
+    let rest = &source[start..];
+    let end = rest.find("\nfn left_open(").expect("left_open follows");
+    let body = &rest[..end];
+    assert!(body.contains("sqlx::raw_sql(sql)"));
+    assert!(!body.contains("sqlx::query("));
+}
+
+#[tokio::test]
 async fn recorded_batch_connection_is_what_cancel_targets() {
     batch_publishes_connection_before_statements();
     let connector = MySqlConnector::new();

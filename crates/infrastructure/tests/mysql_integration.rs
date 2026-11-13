@@ -53,7 +53,12 @@ fn mysql_config() -> Option<ConnectionConfig> {
 }
 
 async fn setup() -> Option<(MySqlConnector, ConnectionHandle, String)> {
-    let config = mysql_config()?;
+    setup_with_timeout(30_000).await
+}
+
+async fn setup_with_timeout(query_timeout_ms: u64) -> Option<(MySqlConnector, ConnectionHandle, String)> {
+    let mut config = mysql_config()?;
+    config.query_timeout_ms = query_timeout_ms;
     let password = std::env::var("DATABASE_URL")
         .ok()
         .and_then(|url| {
@@ -781,4 +786,413 @@ async fn mysql_strict_ssl_modes_reject_a_server_without_tls() {
             "strict TLS test_connection must not downgrade to plaintext"
         );
     }
+}
+
+/// A run staged while the tab holds `BEGIN` belongs to the tab's transaction.
+/// The tab's `ROLLBACK` must undo the run's writes. On a separate pool connection
+/// the run would commit alone and survive the tab's rollback.
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL=mysql://...
+async fn mysql_joined_parameterized_transaction_rolls_back_with_the_tab() {
+    use db_pro_core::application::with_query_session;
+    use db_pro_core::domain::query::{CellValue, QueryParam};
+    use db_pro_core::ports::{ParameterizedTransactionStatement, TransactionStatementResult};
+
+    let Some((connector, handle, _database)) = setup().await else {
+        eprintln!("skipping MySQL integration test: DATABASE_URL is not a mysql:// URL");
+        return;
+    };
+
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let table = format!("dbpro_join_tx_{}_{}", std::process::id(), suffix);
+
+    connector
+        .execute(
+            &handle,
+            &format!("CREATE TABLE {table} (id VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL)"),
+            &[],
+        )
+        .await
+        .expect("create joined fixture");
+
+    let ids = |rows: &db_pro_core::domain::query::QueryResult| -> Vec<String> {
+        rows.rows
+            .iter()
+            .map(|row| match &row.0[0] {
+                CellValue::Text(value) => value.clone(),
+                other => panic!("unexpected id cell: {other:?}"),
+            })
+            .collect()
+    };
+
+    with_query_session(Some("mysql-join-tab"), async {
+        connector
+            .execute(&handle, "BEGIN", &[])
+            .await
+            .expect("BEGIN opens the tab transaction");
+        connector
+            .execute(
+                &handle,
+                &format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
+                &[QueryParam::Text("tab".into()), QueryParam::Text("Tab work".into())],
+            )
+            .await
+            .expect("tab statement inside its own transaction");
+
+        let results = connector
+            .execute_parameterized_transaction(
+                &handle,
+                &[ParameterizedTransactionStatement {
+                    sql: format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
+                    params: vec![QueryParam::Text("joined".into()), QueryParam::Text("Joined".into())],
+                    expect_affected_rows: true,
+                    max_affected_rows: Some(1),
+                }],
+            )
+            .await
+            .expect("the joined run succeeds");
+        assert!(
+            matches!(
+                results.as_slice(),
+                [TransactionStatementResult::Affected {
+                    row_count: 1,
+                    duration_ms: _
+                }]
+            ),
+            "the run reports its own affected row, got {results:?}"
+        );
+
+        let inside = connector
+            .query(&handle, &format!("SELECT id FROM {table} ORDER BY id"), &[])
+            .await
+            .expect("read inside the tab transaction");
+        assert_eq!(
+            ids(&inside),
+            vec!["joined".to_string(), "tab".to_string()],
+            "the run's write must be visible to the tab that owns the transaction"
+        );
+
+        connector
+            .execute(&handle, "ROLLBACK", &[])
+            .await
+            .expect("rollback the tab transaction");
+    })
+    .await;
+
+    let after = connector
+        .query(&handle, &format!("SELECT id FROM {table} ORDER BY id"), &[])
+        .await
+        .expect("read after rollback");
+    assert!(
+        ids(&after).is_empty(),
+        "the tab's rollback must undo the joined write too, got {:?}",
+        ids(&after)
+    );
+
+    connector
+        .execute(&handle, &format!("DROP TABLE {table}"), &[])
+        .await
+        .expect("drop joined fixture");
+    connector.disconnect(&handle).await.expect("disconnect fixture");
+}
+
+/// Failed statements in the joined run roll back only that run's savepoint.
+/// The tab's already-open work must survive, and the connection must still accept SQL.
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL=mysql://...
+async fn mysql_joined_parameterized_transaction_rolls_back_only_its_own_statements() {
+    use db_pro_core::application::with_query_session;
+    use db_pro_core::domain::query::{CellValue, QueryParam};
+    use db_pro_core::ports::ParameterizedTransactionStatement;
+
+    let Some((connector, handle, _database)) = setup().await else {
+        eprintln!("skipping MySQL integration test: DATABASE_URL is not a mysql:// URL");
+        return;
+    };
+
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let table = format!("dbpro_join_sp_{}_{}", std::process::id(), suffix);
+
+    connector
+        .execute(
+            &handle,
+            &format!("CREATE TABLE {table} (id VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL)"),
+            &[],
+        )
+        .await
+        .expect("create joined-run fixture");
+
+    let ids = |rows: &db_pro_core::domain::query::QueryResult| -> Vec<String> {
+        rows.rows
+            .iter()
+            .map(|row| match &row.0[0] {
+                CellValue::Text(value) => value.clone(),
+                other => panic!("unexpected id cell: {other:?}"),
+            })
+            .collect()
+    };
+
+    with_query_session(Some("mysql-join-tab"), async {
+        connector
+            .execute(&handle, "BEGIN", &[])
+            .await
+            .expect("BEGIN opens the tab transaction");
+        connector
+            .execute(
+                &handle,
+                &format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
+                &[QueryParam::Text("tab".into()), QueryParam::Text("Tab work".into())],
+            )
+            .await
+            .expect("tab statement inside its own transaction");
+
+        let failure = connector
+            .execute_parameterized_transaction(
+                &handle,
+                &[
+                    ParameterizedTransactionStatement {
+                        sql: format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
+                        params: vec![QueryParam::Text("joined".into()), QueryParam::Text("Joined".into())],
+                        expect_affected_rows: true,
+                        max_affected_rows: Some(1),
+                    },
+                    ParameterizedTransactionStatement {
+                        sql: "THIS IS NOT VALID SQL".into(),
+                        params: Vec::new(),
+                        expect_affected_rows: false,
+                        max_affected_rows: None,
+                    },
+                ],
+            )
+            .await
+            .expect_err("the invalid statement must fail the joined run");
+
+        assert_eq!(failure.phase, TransactionFailurePhase::Statement);
+        assert_eq!(failure.statement_index, 1);
+        assert_eq!(failure.results.len(), 1, "the statement before the failure did run");
+        assert_eq!(
+            failure.outcome,
+            TransactionFailureOutcome::LeftOpen,
+            "a confirmed savepoint undo leaves the tab's transaction open"
+        );
+
+        let inside = connector
+            .query(&handle, &format!("SELECT id FROM {table} ORDER BY id"), &[])
+            .await
+            .expect("the tab transaction must still accept statements after the joined failure");
+        assert_eq!(
+            ids(&inside),
+            vec!["tab".to_string()],
+            "the joined write must be undone while the tab's own work is kept"
+        );
+
+        connector
+            .execute(&handle, "COMMIT", &[])
+            .await
+            .expect("commit the tab transaction");
+    })
+    .await;
+
+    let after = connector
+        .query(&handle, &format!("SELECT id FROM {table} ORDER BY id"), &[])
+        .await
+        .expect("read after commit");
+    assert_eq!(
+        ids(&after),
+        vec!["tab".to_string()],
+        "the joined run's write must not survive the tab's commit"
+    );
+
+    connector
+        .execute(&handle, &format!("DROP TABLE {table}"), &[])
+        .await
+        .expect("drop joined-run fixture");
+    connector.disconnect(&handle).await.expect("disconnect fixture");
+}
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL=mysql://...
+async fn mysql_abandoned_joined_parameterized_transaction_cannot_be_committed() {
+    assert_interrupted_joined_run_is_discarded(JoinedRunInterruption::DropFuture).await;
+}
+
+#[tokio::test]
+#[ignore] // Requires DATABASE_URL=mysql://...
+async fn mysql_joined_parameterized_timeout_bounds_cleanup_and_discards_unconfirmed_undo() {
+    assert_interrupted_joined_run_is_discarded(JoinedRunInterruption::StatementTimeout).await;
+}
+
+enum JoinedRunInterruption {
+    DropFuture,
+    StatementTimeout,
+}
+
+async fn assert_interrupted_joined_run_is_discarded(interruption: JoinedRunInterruption) {
+    use db_pro_core::application::with_query_session;
+    use db_pro_core::domain::query::{CellValue, QueryParam};
+    use db_pro_core::ports::ParameterizedTransactionStatement;
+    use std::time::Duration;
+
+    let query_timeout_ms = match interruption {
+        JoinedRunInterruption::DropFuture => 30_000,
+        JoinedRunInterruption::StatementTimeout => 1_000,
+    };
+    let Some((connector, handle, _database)) = setup_with_timeout(query_timeout_ms).await else {
+        eprintln!("skipping MySQL integration test: DATABASE_URL is not a mysql:// URL");
+        return;
+    };
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_nanos();
+    let table = format!("dbpro_join_interrupt_{}_{}", std::process::id(), suffix);
+    connector
+        .execute(
+            &handle,
+            &format!("CREATE TABLE {table} (id VARCHAR(64) PRIMARY KEY, name VARCHAR(100) NOT NULL) ENGINE=InnoDB"),
+            &[],
+        )
+        .await
+        .expect("create interrupted-run fixture");
+    connector
+        .execute(
+            &handle,
+            &format!("INSERT INTO {table} VALUES ('locked', 'original')"),
+            &[],
+        )
+        .await
+        .expect("seed the row used to block the second joined statement");
+
+    let pool = connector.get_pool(&handle).await.expect("fixture pool");
+    let mut blocker = pool.begin().await.expect("begin blocker");
+    sqlx::query(&format!("UPDATE {table} SET name = 'blocker' WHERE id = 'locked'"))
+        .execute(&mut *blocker)
+        .await
+        .expect("hold a row lock until after the joined future finishes");
+
+    with_query_session(Some("mysql-interrupted-join-tab"), async {
+        connector
+            .execute(&handle, "BEGIN", &[])
+            .await
+            .expect("open tab transaction");
+        connector
+            .execute(
+                &handle,
+                &format!("INSERT INTO {table} VALUES ('tab', 'prior work')"),
+                &[],
+            )
+            .await
+            .expect("write prior tab work");
+        let connection_id = connector
+            .query(&handle, "SELECT CAST(CONNECTION_ID() AS SIGNED)", &[])
+            .await
+            .expect("read tab connection id");
+        let connection_id = match &connection_id.rows[0].0[0] {
+            CellValue::Int64(id) => *id as u64,
+            other => panic!("unexpected connection id cell: {other:?}"),
+        };
+        let statements = [
+            ParameterizedTransactionStatement {
+                sql: format!("INSERT INTO {table} (id, name) VALUES (?, ?)"),
+                params: vec![
+                    QueryParam::Text("joined".into()),
+                    QueryParam::Text("partial write".into()),
+                ],
+                expect_affected_rows: true,
+                max_affected_rows: Some(1),
+            },
+            ParameterizedTransactionStatement {
+                sql: format!("UPDATE {table} SET name = ? WHERE id = ?"),
+                params: vec![QueryParam::Text("joined".into()), QueryParam::Text("locked".into())],
+                expect_affected_rows: true,
+                max_affected_rows: Some(1),
+            },
+        ];
+
+        match interruption {
+            JoinedRunInterruption::DropFuture => {
+                let mut run = Box::pin(connector.execute_parameterized_transaction(&handle, &statements));
+                let blocked = async {
+                    loop {
+                        let info = sqlx::query_scalar::<_, Option<String>>(
+                            "SELECT INFO FROM information_schema.PROCESSLIST WHERE ID = ?",
+                        )
+                        .bind(connection_id)
+                        .fetch_optional(&pool)
+                        .await
+                        .expect("observe the tab's blocked query")
+                        .flatten();
+                        if info.is_some_and(|sql| sql.starts_with("UPDATE ") && sql.contains(&table)) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                };
+                tokio::select! {
+                    result = &mut run => panic!("the locked second statement must remain pending: {result:?}"),
+                    observed = tokio::time::timeout(Duration::from_secs(5), blocked) => {
+                        observed.expect("the first write must finish and the second statement must block");
+                    }
+                }
+                drop(run);
+            }
+            JoinedRunInterruption::StatementTimeout => {
+                let failure = tokio::time::timeout(
+                    Duration::from_secs(4),
+                    connector.execute_parameterized_transaction(&handle, &statements),
+                )
+                .await
+                .expect("savepoint cleanup must not wait indefinitely on the blocked statement")
+                .expect_err("the blocked joined statement must time out");
+                assert_eq!(failure.phase, TransactionFailurePhase::Statement);
+                assert_eq!(failure.statement_index, 1);
+                assert_eq!(
+                    failure.results.len(),
+                    1,
+                    "the partial write must run before the timeout"
+                );
+                assert_eq!(failure.outcome, TransactionFailureOutcome::Unknown);
+                assert!(
+                    failure.error.to_string().contains("savepoint cleanup timed out"),
+                    "the unconfirmed rollback must be reported: {failure:?}"
+                );
+            }
+        }
+
+        blocker.rollback().await.expect("release the blocking row lock");
+        connector
+            .execute(&handle, "COMMIT", &[])
+            .await
+            .expect("a later COMMIT must not recover the abandoned tab connection");
+        let rows = connector
+            .query(&handle, &format!("SELECT id FROM {table} ORDER BY id"), &[])
+            .await
+            .expect("read committed rows after interruption");
+        let ids: Vec<_> = rows
+            .rows
+            .iter()
+            .map(|row| match &row.0[0] {
+                CellValue::Text(id) => id.as_str(),
+                other => panic!("unexpected id cell: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["locked"],
+            "discarding an unconfirmed joined run must prevent committing its partial write or prior tab work"
+        );
+    })
+    .await;
+
+    connector
+        .execute(&handle, &format!("DROP TABLE {table}"), &[])
+        .await
+        .expect("drop interrupted-run fixture");
+    connector.disconnect(&handle).await.expect("disconnect fixture");
 }
