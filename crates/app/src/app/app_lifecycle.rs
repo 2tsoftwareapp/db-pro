@@ -171,14 +171,10 @@ impl DbProApp {
     }
 
     fn prepare_frame(&mut self, ctx: &egui::Context) {
-        if self.initial_frames_count < 3 {
-            self.initial_frames_count += 1;
-            // Capture runs pin an exact evidence viewport; forcing maximize
-            // here fights that pin.
-            if std::env::var_os("DB_PRO_WINDOW_SIZE").is_none() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-            }
-        }
+        // #573: the window is no longer re-maximized on the first frames. eframe
+        // restores the persisted frame (size *and* position); a viewport command
+        // issued here overrode it, so a resized window came back maximized.
+        self.initial_frames_count = self.initial_frames_count.saturating_add(1);
         self.request_connections_once();
         let runtime_events_pending = self.apply_runtime_events();
         if self.workspace.activity == Activity::Monitor

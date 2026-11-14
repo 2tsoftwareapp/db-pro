@@ -174,23 +174,26 @@ impl QueryService {
         let policy = self.safety_policy_for(connection_id).await?;
         validate_against_policy(sql, &policy).map_err(DbError::QueryFailed)?;
 
-        let result = super::query_schema::with_query_schema(schema, self.connector.query(&handle, sql, params)).await?;
-        result.validate().map_err(DbError::QueryFailed)?;
+        let started = std::time::Instant::now();
+        let outcome = super::query_schema::with_query_schema(schema, self.connector.query(&handle, sql, params)).await;
+        let result = match outcome {
+            Ok(result) => {
+                if let Err(error) = result.validate() {
+                    // #600: an invalid result set is still a failed run worth keeping.
+                    self.record_failed_statement(connection_id, sql, started, database, schema, &error.to_string())
+                        .await;
+                    return Err(DbError::QueryFailed(error));
+                }
+                result
+            }
+            Err(error) => {
+                self.record_failed_statement(connection_id, sql, started, database, schema, &error.to_string())
+                    .await;
+                return Err(error);
+            }
+        };
         self.invalidate_schema_cache_if_ddl(connection_id, sql, driver).await;
-
-        if let Err(e) = self
-            .history
-            .save(
-                connection_id,
-                sql,
-                &result,
-                database.map(str::to_owned),
-                schema.map(str::to_owned),
-            )
-            .await
-        {
-            tracing::warn!("failed to save query history: {e}");
-        }
+        self.record_history(connection_id, sql, Some(&result), database, schema).await;
 
         Ok(result)
     }
@@ -258,30 +261,29 @@ impl QueryService {
             }
         })
         .await;
-        if result.error.is_some() {
+        result.total_duration_ms = execution.elapsed_ms();
+
+        // #600: failed scripts go to history too, and a successful multi-statement run records
+        // the whole script's duration and row total rather than the first statement's metrics.
+        if let Some((_, failure)) = result.error.as_ref() {
+            self.record_failed_statement(
+                connection_id,
+                sql,
+                execution.started_at.elapsed(),
+                database,
+                schema,
+                &failure.message,
+            )
+            .await;
             return Ok(result);
         }
 
         if statements.len() == 1 && has_schema_change {
             self.invalidate_schema_cache(connection_id).await;
         }
-        result.total_duration_ms = execution.elapsed_ms();
-
-        if let Some(first) = result.results.first() {
-            if let Err(error) = self
-                .history
-                .save(
-                    connection_id,
-                    sql,
-                    first,
-                    database.map(str::to_owned),
-                    schema.map(str::to_owned),
-                )
-                .await
-            {
-                tracing::warn!("failed to save query history: {error}");
-            }
-        }
+        let script_result = script_history_result(&result);
+        self.record_history(connection_id, sql, Some(&script_result), database, schema)
+            .await;
 
         Ok(result)
     }
@@ -470,6 +472,97 @@ fn transaction_result_to_query_result(
     };
     query_result.validate().map_err(DbError::QueryFailed)?;
     Ok((kind, query_result))
+}
+
+/// Persist one history entry, masking credentials (#599) and never failing the query.
+async fn record_history(
+    &self,
+    connection_id: &ConnectionId,
+    sql: &str,
+    result: Option<&QueryResult>,
+    database: Option<&str>,
+    schema: Option<&str>,
+) {
+    let redacted_sql = history_sql(sql);
+    if let Err(error) = self
+        .history
+        .save(
+            connection_id,
+            &redacted_sql,
+            result,
+            database.map(str::to_owned),
+            schema.map(str::to_owned),
+            None,
+        )
+        .await
+    {
+        tracing::warn!("failed to save query history: {error}");
+    }
+}
+
+/// Persist a statement that failed, with its redacted error text (#600).
+async fn record_failed_statement(
+    &self,
+    connection_id: &ConnectionId,
+    sql: &str,
+    elapsed: std::time::Duration,
+    database: Option<&str>,
+    schema: Option<&str>,
+    error: &str,
+) {
+    let redacted_sql = history_sql(sql);
+    let (redacted_error, _) = crate::domain::audit::redact_secrets(error);
+    let failed = failed_history_result(elapsed);
+    if let Err(save_error) = self
+        .history
+        .save(
+            connection_id,
+            &redacted_sql,
+            Some(&failed),
+            database.map(str::to_owned),
+            schema.map(str::to_owned),
+            Some(redacted_error),
+        )
+        .await
+    {
+        tracing::warn!("failed to save failed query to history: {save_error}");
+    }
+}
+
+/// Synthetic result describing a failed statement: zero rows, real elapsed time (#600).
+fn failed_history_result(elapsed: std::time::Duration) -> QueryResult {
+    QueryResult {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        row_count: 0,
+        duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+    }
+}
+
+/// Whole-script metrics for history: summed duration and row count (#600).
+fn script_history_result(result: &MultiQueryResult) -> QueryResult {
+    QueryResult {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        row_count: result.results.iter().map(|result| result.row_count).sum(),
+        duration_ms: result.total_duration_ms,
+    }
+}
+
+/// SQL stored in query history, with credentials masked (#599).
+///
+/// `ALTER ROLE … PASSWORD 'x'`, `USER MAPPING … OPTIONS (password 'x')`,
+/// `CREATE SUBSCRIPTION … CONNECTION 'host=… password=x'` and `dblink_connect('…password=x…')` all
+/// reach the meta store otherwise, where they are visible in History and travel with backups.
+/// Statements without secrets are returned unchanged so history stays recognisable.
+fn history_sql(sql: &str) -> String {
+    let (redacted, _) = crate::domain::audit::redact_secrets(sql);
+    redacted
+}
+
+#[cfg(test)]
+pub(crate) fn history_sql_for_test(sql: &str) -> String {
+    history_sql(sql)
 }
 
 #[cfg(test)]

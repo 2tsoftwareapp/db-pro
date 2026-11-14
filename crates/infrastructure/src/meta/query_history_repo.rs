@@ -13,25 +13,30 @@ impl QueryHistoryRepository for SQLiteMetaStore {
         &self,
         connection_id: &ConnectionId,
         sql: &str,
-        result: &QueryResult,
+        result: Option<&QueryResult>,
         database: Option<String>,
         schema: Option<String>,
+        error_message: Option<String>,
     ) -> Result<(), DbError> {
         let id = uuid::Uuid::new_v4().to_string();
         let executed_at = chrono::Utc::now().to_rfc3339();
         self.actor
             .raw_query(
                 // cc-scan:allow LINE_TOO_LONG — literal must not wrap
-                "INSERT INTO query_history (id, connection_id, sql, executed_at, duration_ms, row_count, database, schema) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)".into(),
+                "INSERT INTO query_history (id, connection_id, sql, executed_at, duration_ms, row_count, database, schema, success, error_message) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)".into(),
                 vec![
                     id,
                     connection_id.to_string(),
                     sql.into(),
                     executed_at,
-                    result.duration_ms.to_string(),
-                    result.row_count.to_string(),
+                    result.map_or(0, |result| result.duration_ms).to_string(),
+                    result.map_or(0, |result| result.row_count).to_string(),
                     database.unwrap_or_default(),
                     schema.unwrap_or_default(),
+                    // #600: a missing result means the statement failed.
+                    i64::from(result.is_some()).to_string(),
+                    // #600: prefer the redacted server error over a generic placeholder.
+                    error_message.unwrap_or_default(),
                 ],
             )
             .await?;
@@ -43,7 +48,7 @@ impl QueryHistoryRepository for SQLiteMetaStore {
             .actor
             .raw_query(
                 // cc-scan:allow LINE_TOO_LONG — literal must not wrap
-                "SELECT id, connection_id, sql, executed_at, duration_ms, row_count, database, schema FROM query_history WHERE connection_id = ?1 ORDER BY executed_at DESC LIMIT ?2".into(),
+                "SELECT id, connection_id, sql, executed_at, duration_ms, row_count, database, schema, success, error_message FROM query_history WHERE connection_id = ?1 ORDER BY executed_at DESC LIMIT ?2".into(),
                 vec![connection_id.to_string(), limit.to_string()],
             )
             .await?;
@@ -61,6 +66,11 @@ impl QueryHistoryRepository for SQLiteMetaStore {
                 row_count: parse_metric(&row[5], "row_count")?,
                 database: if row[6].is_empty() { None } else { Some(row[6].clone()) },
                 schema: if row[7].is_empty() { None } else { Some(row[7].clone()) },
+                success: row.get(8).map(|value| value != "0").unwrap_or(true),
+                error_message: row
+                    .get(9)
+                    .filter(|value| !value.is_empty())
+                    .cloned(),
             });
         }
         Ok(history)

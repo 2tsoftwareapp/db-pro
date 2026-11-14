@@ -157,10 +157,17 @@ pub struct ConnectionConfig {
     /// Workspace environment label for safety UX.
     #[serde(default)]
     pub environment: ConnectionEnvironment,
-    /// If true, only read-only queries (SELECT, SHOW, EXPLAIN) are allowed.
-    /// Enforced at the backend application layer.
+    /// If true, only read-only queries (SELECT, SHOW, EXPLAIN) are allowed,
+    /// enforced both by the statement classifier and by the server
+    /// (`default_transaction_read_only` for PostgreSQL, `PRAGMA query_only` for
+    /// SQLite) — a `SELECT` can call a function that writes (#588).
     #[serde(default)]
     pub readonly: bool,
+    /// SQLite only: allow `connect` to create the database file when it does not
+    /// exist. Off by default, so a mistyped path fails instead of silently
+    /// producing an empty database (#597).
+    #[serde(default)]
+    pub create_if_missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -229,6 +236,7 @@ impl Default for ConnectionConfig {
             favorite: false,
             environment: ConnectionEnvironment::Development,
             readonly: false,
+            create_if_missing: false,
         }
     }
 }

@@ -57,7 +57,7 @@ fn sqlite_draft_is_exempt_from_host_and_username() {
         username: String::new(),
         port: String::new(),
         ..Default::default()
-    };
+};
     assert_eq!(validate_connection_draft(&draft), Ok(()));
 }
 

@@ -16,6 +16,7 @@ pub struct ScrollArea {
     id_salt: Option<Box<dyn FnOnce(egui::ScrollArea) -> egui::ScrollArea>>,
     stick_to_bottom: Option<bool>,
     vertical_scroll_offset: Option<f32>,
+    horizontal_scroll_offset: Option<f32>,
     // Retained as part of the stable constructor contract; ScrollArea currently uses egui's
     // native visuals directly and has no theme-specific paint decisions.
     #[allow(dead_code)]
@@ -32,6 +33,7 @@ impl ScrollArea {
             id_salt: None,
             stick_to_bottom: None,
             vertical_scroll_offset: None,
+            horizontal_scroll_offset: None,
             theme,
         }
     }
@@ -88,7 +90,18 @@ impl ScrollArea {
         if let Some(offset) = self.vertical_scroll_offset {
             area = area.vertical_scroll_offset(offset);
         }
+        if let Some(offset) = self.horizontal_scroll_offset {
+            area = area.horizontal_scroll_offset(offset);
+        }
         area
+    }
+
+    /// External horizontal offset to follow, e.g. a header scrolled by another
+    /// area. The offset is applied through egui's scroll state before the area
+    /// is built, so both areas stay column-aligned without nested scroll areas.
+    pub fn horizontal_scroll_offset(mut self, offset: f32) -> Self {
+        self.horizontal_scroll_offset = Some(offset);
+        self
     }
 
     pub fn show<R>(self, ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {

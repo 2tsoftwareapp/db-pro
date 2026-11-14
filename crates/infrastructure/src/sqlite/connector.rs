@@ -53,12 +53,19 @@ impl SQLiteConnector {
 #[async_trait]
 impl DbConnector for SQLiteConnector {
     async fn connect(&self, config: &ConnectionConfig, _password: &str) -> Result<ConnectionHandle, DbError> {
-        let db_path = if config.database.is_empty() {
-            ":memory:"
-        } else {
-            &config.database
-        };
-        let handle = super::actor::SqliteActor::spawn(db_path)?;
+        let (db_path, mode) = sqlite_target(config)?;
+        let handle = super::actor::SqliteActor::spawn_with_mode(db_path, mode)?;
+        if config.readonly {
+            // A read-only gate that only inspects the statement text still lets
+            // a trigger, a generated column or a `RETURNING` write through, and
+            // it cannot see writes done by `SELECT`-shaped pragmas (#588).
+            // SQLite enforces it itself: `SQLITE_OPEN_READ_ONLY` for the file
+            // plus `query_only` for anything that slipped past the flags.
+            handle
+                .execute_statement("PRAGMA query_only = 1".to_owned())
+                .await
+                .map_err(|error| DbError::ConnectionFailed(format!("cannot enable SQLite query_only: {error}")))?;
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let entry = ActorEntry {
             handle,
@@ -77,12 +84,10 @@ impl DbConnector for SQLiteConnector {
     }
 
     async fn test_connection(&self, config: &ConnectionConfig, _password: &str) -> Result<(), DbError> {
-        let db_path = if config.database.is_empty() {
-            ":memory:"
-        } else {
-            &config.database
-        };
-        let actor = super::actor::SqliteActor::spawn(db_path)?;
+        // Testing must never create the file it is testing (#597): a typo would
+        // otherwise "succeed" against a brand-new empty database.
+        let (db_path, _) = sqlite_target(config)?;
+        let actor = super::actor::SqliteActor::spawn_with_mode(db_path, super::actor::SqliteOpenMode::Existing)?;
         actor
             .execute("SELECT 1".into(), vec![], config.max_rows, config.query_timeout_ms)
             .await
@@ -208,3 +213,32 @@ impl DbConnector for SQLiteConnector {
 #[cfg(test)]
 #[path = "tests/connector_tests.rs"]
 mod tests;
+
+/// Where a SQLite connection points, and whether opening may create it (#597).
+///
+/// An empty `database` used to fall back to `:memory:` silently, so a user who
+/// meant to reconnect to a file got a throwaway database and lost everything
+/// they created in it on disconnect. In-memory is now an explicit choice
+/// (`:memory:` or `memory:`), and a file path is only created on connect when
+/// the connection was saved with `create_if_missing`.
+fn sqlite_target(config: &ConnectionConfig) -> Result<(&str, super::actor::SqliteOpenMode), DbError> {
+    let database = config.database.trim();
+    if database.is_empty() {
+        return Err(DbError::ConnectionFailed(
+            "SQLite database path is empty; choose a file or select in-memory explicitly".into(),
+        ));
+    }
+    if database.eq_ignore_ascii_case(":memory:") || database.eq_ignore_ascii_case("memory:") {
+        return Ok((":memory:", super::actor::SqliteOpenMode::Memory));
+    }
+    let mode = if config.readonly {
+        // The engine enforces read-only, so no write can slip through the
+        // statement classifier (#588).
+        super::actor::SqliteOpenMode::ReadOnly
+    } else if config.create_if_missing {
+        super::actor::SqliteOpenMode::CreateIfMissing
+    } else {
+        super::actor::SqliteOpenMode::Existing
+    };
+    Ok((database, mode))
+}

@@ -229,3 +229,185 @@
         assert!(workspace.expanded.contains("keep"));
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    #[test]
+    fn dependency_edges_are_cached_until_the_index_epoch_moves_578() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("migrations")).unwrap();
+        std::fs::write(
+            dir.join("migrations/001_init.sql"),
+            "SELECT * FROM users JOIN accounts ON accounts.id = users.id;\n",
+        )
+        .unwrap();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+
+        let epoch = workspace.index_epoch();
+        let first = workspace.dependency_edges().to_vec();
+        assert!(!first.is_empty(), "graph should see the FROM/JOIN refs");
+        // Second call is served from the cache: same epoch, same data.
+        let second = workspace.dependency_edges().to_vec();
+        assert_eq!(first, second);
+        assert!(workspace.dependency_edge_cache.is_some());
+        assert_eq!(
+            workspace.dependency_edge_cache.as_ref().map(|c| c.index_epoch),
+            Some(epoch)
+        );
+
+        // Rewriting the file must not be observed while the epoch is stable.
+        std::fs::write(
+            dir.join("migrations/001_init.sql"),
+            "SELECT * FROM brand_new_table;\n",
+        )
+        .unwrap();
+        assert_eq!(workspace.dependency_edges().to_vec(), first);
+
+        // A rescan bumps the epoch and drops the cache.
+        workspace.refresh().unwrap();
+        assert!(workspace.index_epoch() > epoch);
+        let refreshed = workspace.dependency_edges().to_vec();
+        assert!(refreshed
+            .iter()
+            .any(|edge| edge.object_name.contains("brand_new_table")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn closing_the_workspace_invalidates_dependency_edges_578() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("q.sql"), "SELECT * FROM orders;\n").unwrap();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+        let epoch = workspace.index_epoch();
+        assert!(!workspace.dependency_edges().is_empty());
+        workspace.close();
+        assert!(workspace.index_epoch() > epoch);
+        assert!(workspace.dependency_edges().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn create_and_delete_update_the_index_without_a_rescan_579() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("sql")).unwrap();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+        workspace.set_trusted(true);
+        let epoch = workspace.index_epoch();
+
+        let created = workspace.create_file("sql", "new.sql", "SELECT 1;\n").unwrap();
+        assert!(created.exists());
+        assert!(workspace.index_epoch() > epoch);
+        assert!(workspace
+            .roots
+            .iter()
+            .flat_map(|root| root.index.iter())
+            .any(|entry| entry.relative_path == "sql/new.sql" && entry.is_sql));
+
+        workspace.delete_path("sql/new.sql").unwrap();
+        assert!(!workspace
+            .roots
+            .iter()
+            .flat_map(|root| root.index.iter())
+            .any(|entry| entry.relative_path == "sql/new.sql"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shell_tasks_stream_and_cancel_579() {
+        let dir = temp_dir();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+        workspace.set_trusted(true);
+        let cwd = dir.clone();
+        let handle =
+            ide_workspace_scan::spawn_task_task("echo hello-db-pro".to_owned(), cwd.clone()).unwrap();
+        let mut lines = Vec::new();
+        let mut code = None;
+        // The worker signals Exit last, so this terminates.
+        for _ in 0..200 {
+            match handle.receiver.try_recv() {
+                Ok(ide_workspace_scan::TaskEvent::Line(line)) => lines.push(line),
+                Ok(ide_workspace_scan::TaskEvent::Exit(exit)) => {
+                    code = Some(exit);
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        assert_eq!(code, Some(Some(0)));
+        assert!(lines.iter().any(|line| line.contains("hello-db-pro")));
+
+        // Cancel path: a long-running command must not block the caller.
+        let slow = ide_workspace_scan::spawn_task_task("sleep 30".to_owned(), cwd).unwrap();
+        let started = std::time::Instant::now();
+        slow.kill();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn read_workers_match_the_blocking_search_579() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("a.sql"), "SELECT * FROM orders;\n").unwrap();
+        std::fs::write(dir.join("b.sql"), "SELECT * FROM customers;\n").unwrap();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+        workspace.set_trusted(true);
+
+        let blocking = workspace.search("orders", 10);
+        let receiver = ide_workspace_scan::spawn_search_task(
+            workspace.read_snapshot(),
+            workspace.root_ids(),
+            "orders".to_owned(),
+            10,
+        );
+        match receiver.recv().unwrap() {
+            ide_workspace_scan::WorkspaceReadOutcome::Hits(hits) => assert_eq!(blocking, hits),
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+
+        let receiver = ide_workspace_scan::spawn_apply_replace_task(
+            workspace.read_snapshot(),
+            "customers".to_owned(),
+            "clients".to_owned(),
+        );
+        match receiver.recv().unwrap() {
+            ide_workspace_scan::WorkspaceReadOutcome::Replaced(result) => {
+                assert_eq!(result.unwrap(), 1);
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+        let updated = std::fs::read_to_string(dir.join("b.sql")).unwrap();
+        assert!(updated.contains("clients"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #579: replace-in-files rewrites contents only, so it must not rescan the
+    /// tree — but cached dependency edges must still be dropped.
+    #[test]
+    fn apply_replace_keeps_the_index_and_drops_edge_cache_579() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("a.sql"), "SELECT 1;\n").unwrap();
+        std::fs::write(dir.join("b.sql"), "SELECT customers FROM t;\n").unwrap();
+        let mut workspace = IdeWorkspaceState::default();
+        workspace.open_root(dir.clone()).unwrap();
+        workspace.set_trusted(true);
+        assert!(!workspace.dependency_edges().is_empty());
+        let epoch_before = workspace.index_epoch;
+        let index_before = workspace.roots[0].index.clone();
+
+        let count = workspace.apply_replace("customers", "clients").unwrap();
+        assert_eq!(count, 1);
+
+        // The file set is unchanged, so the index is untouched — and the cached
+        // edges were dropped even though no rescan happened.
+        assert_eq!(workspace.roots[0].index, index_before);
+        assert!(workspace.index_epoch > epoch_before);
+        assert!(workspace.dependency_edge_cache.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

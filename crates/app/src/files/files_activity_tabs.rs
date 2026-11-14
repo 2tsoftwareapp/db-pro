@@ -168,12 +168,15 @@ impl DbProApp {
                 command: &mut self.workspace.files.workspace_task_command,
                 last_task: self.workspace.files.ide_workspace.last_task.as_ref(),
                 pending_shell: self.workspace.files.pending_shell,
+                task_output: &self.workspace.files.task_output,
+                task_running: self.workspace.files.task_in_flight(),
             };
             context.draw(ui)
         };
         for action in actions {
             match action {
                 FilesTasksAction::RunTask => self.workspace.files.request_shell(&mut self.feedback),
+                FilesTasksAction::CancelTask => self.workspace.files.cancel_task(&mut self.feedback),
                 FilesTasksAction::ConfirmShell => self.workspace.files.confirm_shell(&mut self.feedback),
                 FilesTasksAction::CancelShell => self.workspace.files.pending_shell = false,
                 FilesTasksAction::RunBenchmark => {
@@ -199,7 +202,8 @@ impl DbProApp {
     }
 
     pub(super) fn draw_files_graph_tab(&mut self, ui: &mut egui::Ui) {
-        let edges = self.workspace.files.ide_workspace.dependency_edges();
+        // #578: cached per index epoch — no per-frame file reads.
+        let edges = self.workspace.files.ide_workspace.dependency_edges().to_vec();
         for action in files_secondary_tabs_view::draw_graph(ui, self.theme, &edges) {
             let files_secondary_tabs_view::FilesSecondaryTabAction::OpenFile(path) = action;
             self.open_workspace_sql_file(path);

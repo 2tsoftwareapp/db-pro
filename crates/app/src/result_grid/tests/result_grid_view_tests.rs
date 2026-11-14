@@ -277,6 +277,7 @@ fn sorting_is_blocked_while_staged_changes_are_present() {
                 staged_changes: ChangeSet::from(vec![StagedChange::Insert {
                     local_id: 1,
                     columns: vec!["name".to_owned()],
+                    data_types: Vec::new(),
                     values: vec![UiCell::Text("draft".to_owned())],
                 }]),
                 ..Default::default()

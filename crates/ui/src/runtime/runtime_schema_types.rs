@@ -166,9 +166,14 @@ pub enum UiTableMutation {
     Delete {
         pk_columns: Vec<String>,
         pk_values: Vec<UiCell>,
+        /// Column types parallel to `pk_columns` (#587). Empty when the caller
+        /// has no metadata; the translator then falls back to content sniffing.
+        pk_data_types: Vec<String>,
     },
     Insert {
         columns: Vec<String>,
+        /// Column types parallel to `columns` (#587).
+        data_types: Vec<String>,
         values: Vec<UiCell>,
     },
 }
@@ -242,6 +247,8 @@ pub struct UiConnectionSummary {
     /// prefill can restore it instead of falling back to a default.
     pub ssl_mode: UiSslMode,
     pub readonly: bool,
+    /// SQLite: the saved "create the database file if it is missing" choice (#597).
+    pub create_if_missing: bool,
     pub tags: Vec<String>,
     pub group: Option<String>,
     pub favorite: bool,

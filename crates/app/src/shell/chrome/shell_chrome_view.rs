@@ -146,7 +146,7 @@ impl DbProApp {
             .query
             .session
             .active_result()
-            .or(self.table.data_query.result.as_ref())
+            .or(self.table.data_query.result_ref())
             .map(|result| result.duration_ms);
         let action = shell_statusbar_view::ShellStatusbarContext {
             theme: self.theme,
@@ -175,21 +175,22 @@ impl DbProApp {
         if !self.workspace.bottom_panel_open {
             return;
         }
-        // #541: the query result reaches the pane as a refcount-bump handle. The
-        // table-view fallback keeps its historical per-frame clone (its storage is
-        // not shared); only the query-dock path was measured as hot.
-        let result = self.query.session.active_result_handle().or_else(|| {
-            self.table
-                .data_query
-                .result
-                .as_ref()
-                .map(|result| std::rc::Rc::new(result.clone()))
-        });
+        // #541/#582: both branches are refcount bumps — the table-data grid is
+        // now stored as an `Rc`, so this used to deep-clone every cell of the
+        // visible page on every frame while the panel was open.
+        let result = self
+            .query
+            .session
+            .active_result_handle()
+            .or_else(|| self.table.data_query.result_handle());
         let height = self.workspace.bottom_panel_height;
+        // #576: the shell dock used the same flat 120–420 px range as the query
+        // dock, so a tall window wasted vertical space and a short one overdrew.
+        let available_height = ui.available_height().max(OUTPUT_MIN_HEIGHT);
         let response = egui::Panel::bottom("output_panel")
             .resizable(true)
             .default_size(height)
-            .size_range(OUTPUT_MIN_HEIGHT..=OUTPUT_MAX_HEIGHT)
+            .size_range(output_dock_min_height(available_height)..=output_dock_max_height(available_height))
             .show_separator_line(false)
             .frame(shell_surface_frame(
                 self.theme,

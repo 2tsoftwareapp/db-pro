@@ -8,7 +8,7 @@
         let mut draft = UiConnectionDraft {
             cloud_snippet: snippet.to_owned(),
             ..UiConnectionDraft::default()
-        };
+};
 
         assert_eq!(apply_connection_snippet(&mut draft, snippet), Ok(()));
         assert_eq!(draft.host, "db.example.com");
@@ -27,7 +27,7 @@
         let mut draft = UiConnectionDraft {
             cloud_snippet: snippet.to_owned(),
             ..UiConnectionDraft::default()
-        };
+};
 
         assert!(apply_connection_snippet(&mut draft, snippet).is_err());
         assert_eq!(draft.cloud_snippet, snippet);

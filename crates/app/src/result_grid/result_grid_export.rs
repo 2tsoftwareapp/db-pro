@@ -2,6 +2,7 @@
 
 use super::*;
 use db_pro_core::application::driver_dialect::driver_type_from_name;
+use db_pro_core::application::DelimitedSafety;
 use db_pro_core::application::DriverDialect;
 use db_pro_core::domain::connection::DriverType;
 use db_pro_core::ports::SqlDialect;
@@ -38,11 +39,19 @@ pub(crate) fn select_top_snippet(driver: &str, from: &str, limit: u32) -> String
     }
 }
 
+/// True when `value` is a bare-printable SQL numeric literal (#590).
+fn is_finite_sql_number(value: &str) -> bool {
+    value.parse::<f64>().is_ok_and(f64::is_finite)
+}
+
 pub(super) fn cell_sql_literal(cell: &UiCell) -> String {
     match cell {
         UiCell::Null => "NULL".to_owned(),
         UiCell::Boolean(value) => value.to_string().to_uppercase(),
-        UiCell::Number(value) if value.parse::<f64>().is_ok() => value.clone(),
+        // #590: `NaN`/`inf`/`Infinity` parse as `f64` but are not valid bare SQL
+        // numeric literals — they must be quoted or PostgreSQL reads them as
+        // identifiers. Only finite numbers print unquoted.
+        UiCell::Number(value) if is_finite_sql_number(value) => value.clone(),
         UiCell::Json(value) => format!("'{}'", value.replace('\'', "''")),
         UiCell::Bytes(value) => format!("'{}'", value.replace('\'', "''")),
         UiCell::Number(value) | UiCell::Text(value) => format!("'{}'", value.replace('\'', "''")),
@@ -51,11 +60,21 @@ pub(super) fn cell_sql_literal(cell: &UiCell) -> String {
 
 /// Escape one field for CSV/TSV output (file export and clipboard).
 ///
-/// Beyond RFC-4180 quoting, a value a spreadsheet would evaluate — leading `=`, `+`, `@`, tab, … —
-/// is prefixed with `'` by `guard_csv_field` so exported data stays inert in Excel/LibreOffice
-/// (#429). Numeric literals parse back as numbers and are left alone.
+/// Beyond RFC-4180 quoting, a value a spreadsheet would evaluate — leading `=`, `@`, tab, … —
+/// is prefixed with `'` so exported data stays inert in Excel/LibreOffice (#429), unless the
+/// caller asked for raw output (#593: clipboard/TSV round-trips must not gain characters).
+/// Numeric literals and phone-like strings are left alone.
 pub(super) fn escape_delimited_field(value: &str, delimiter: char) -> String {
-    let value = db_pro_core::application::guard_csv_field(value);
+    escape_delimited_field_with(value, delimiter, DelimitedSafety::ExcelSafe)
+}
+
+/// [`escape_delimited_field`] with an explicit safety mode (#593).
+pub(super) fn escape_delimited_field_with(
+    value: &str,
+    delimiter: char,
+    safety: DelimitedSafety,
+) -> String {
+    let value = db_pro_core::application::guard_csv_field_with(value, safety);
     if value.contains(delimiter) || value.contains('"') || value.contains('\n') || value.contains('\r') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
@@ -71,19 +90,33 @@ pub(super) fn escape_delimited_field(value: &str, delimiter: char) -> String {
 /// fields, but this formatter emits RFC-4180 quoting for spreadsheet compatibility instead, so the
 /// ambiguity is accepted and documented here (#487).
 pub(super) fn format_cell_delimited(cell: &UiCell, delimiter: char) -> String {
+    format_cell_delimited_with(cell, delimiter, DelimitedSafety::ExcelSafe)
+}
+
+/// [`format_cell_delimited`] with an explicit safety mode (#593).
+pub(super) fn format_cell_delimited_with(
+    cell: &UiCell,
+    delimiter: char,
+    safety: DelimitedSafety,
+) -> String {
     match cell {
         UiCell::Null => "\\N".to_owned(),
         UiCell::Boolean(value) => value.to_string(),
-        UiCell::Number(value) => escape_delimited_field(value, delimiter),
-        UiCell::Text(value) => escape_delimited_field(value, delimiter),
-        UiCell::Json(value) => escape_delimited_field(value, delimiter),
-        UiCell::Bytes(value) => escape_delimited_field(value, delimiter),
+        UiCell::Number(value) => escape_delimited_field_with(value, delimiter, safety),
+        UiCell::Text(value) => escape_delimited_field_with(value, delimiter, safety),
+        UiCell::Json(value) => escape_delimited_field_with(value, delimiter, safety),
+        UiCell::Bytes(value) => escape_delimited_field_with(value, delimiter, safety),
     }
 }
 
+/// Clipboard CSV: raw RFC 4180 only (#593).
+///
+/// The clipboard is pasted into editors, chat and `psql` as often as into a spreadsheet, and a
+/// leading `'` there changes the value. File exports keep the Excel-safe guard.
 pub(super) fn format_cell_csv(cell: &UiCell) -> String {
-    format_cell_delimited(cell, ',')
+    format_cell_delimited_with(cell, ',', DelimitedSafety::Raw)
 }
+
 
 /// Workbook of the visible grid. Integers outside the 53-bit exact range stay text.
 pub(super) fn format_result_excel(result: &UiQueryResult) -> Result<Vec<u8>, String> {

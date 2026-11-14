@@ -52,7 +52,7 @@ impl DbProApp {
             } => self.plan_trigger_toggle(&schema, &table, &name, enable),
             SchemaObjectFolderAction::CopyName(name) => {
                 ui.output_mut(|output| output.commands.push(egui::OutputCommand::CopyText(name.clone())));
-                self.feedback.runtime_message = format!("Copied `{name}` to clipboard");
+                self.feedback.runtime_message = t!("explorer.copy_to_clipboard", name = name).to_string();
             }
             SchemaObjectFolderAction::RefreshSchema => {
                 if let Some(connection_id) = self.connection.lifecycle.active_connection_id().map(str::to_owned) {

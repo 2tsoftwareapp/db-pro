@@ -105,7 +105,7 @@ impl DbProApp {
         };
         match &target {
             MutationTarget::Update { identity, .. } => {
-                if let Some(result) = self.table.data_query.result.as_ref() {
+                if let Some(result) = self.table.data_query.result_ref() {
                     let col_map: std::collections::HashMap<&str, usize> = result
                         .columns
                         .iter()

@@ -16,7 +16,11 @@ use super::{
     selection::SelectionRange,
     syntax::{CachedSqlTokens, SqlDialect, SqlHighlighter, SyntaxToken, SyntaxTokenKind},
 };
-use crate::{components::interact::text_input_info, DbProTheme};
+use crate::{
+    components::interact::text_input_info,
+    tokens::STROKE_THIN,
+    DbProTheme,
+};
 
 const DEFAULT_LINE_HEIGHT: f32 = 20.0;
 const LINE_HEIGHT_MULT: f32 = 1.48;
@@ -87,6 +91,59 @@ enum PairTextResult {
     SkippedExistingClosing,
 }
 
+/// Composition string currently owned by the platform IME.
+///
+/// #570: the editor only handled `ImeEvent::Commit`, so a Vietnamese/CJK IME in
+/// preedit mode showed nothing between keypresses — no composition text, no
+/// underline, and a caret that never moved. The preedit is stored per editor in
+/// egui's temp store (the renderer is rebuilt every frame, so a field cannot hold
+/// it) and painted like ghost text with a composition underline.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ImePreedit {
+    text: String,
+    /// Candidate window anchor in screen coordinates.
+    cursor_range: Option<(usize, usize)>,
+}
+
+impl ImePreedit {
+    fn from_event(event: &egui::ImeEvent) -> Option<Self> {
+        match event {
+            egui::ImeEvent::Preedit(text, cursor_range) => Some(Self {
+                text: text.clone(),
+                cursor_range: cursor_range.map(|(start, end)| (start.min(end), start.max(end))),
+            }),
+            _ => None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Composition text clipped to `cursor_range`'s caret position.
+    fn around_cursor(&self) -> (String, String) {
+        match self.cursor_range {
+            Some((caret, _)) => {
+                let caret = caret.min(self.text.chars().count());
+                let before: String = self.text.chars().take(caret).collect();
+                let after: String = self.text.chars().skip(caret).collect();
+                (before, after)
+            }
+            None => (self.text.clone(), String::new()),
+        }
+    }
+}
+
+fn ime_preedit_key(editor_id: Id) -> Id {
+    editor_id.with("ime_preedit")
+}
+
+fn read_ime_preedit(ui: &Ui, editor_id: Id) -> ImePreedit {
+    ui.ctx()
+        .data(|data| data.get_temp::<ImePreedit>(ime_preedit_key(editor_id)))
+        .unwrap_or_default()
+}
+
 pub struct SqlEditor<'a> {
     pub buffer: &'a mut TextBuffer,
     pub cursor: &'a mut CursorPosition,
@@ -96,6 +153,9 @@ pub struct SqlEditor<'a> {
     pub diagnostics: &'a [Diagnostic],
     pub prediction: Option<&'a EditPrediction>,
     pub prediction_visible: bool,
+    /// Token cache owned by the document (single-threaded UI), borrowed for the
+    /// frame. The render pass clones the cache's shared `Arc<[SyntaxToken]>`
+    /// instead of copying the token vector (#581).
     pub cached_tokens: Option<&'a mut CachedSqlTokens>,
     pub search_query: &'a str,
     pub active_search_match_index: usize,
@@ -344,7 +404,7 @@ impl<'a> SqlEditor<'a> {
 
         // Handle Keyboard Events when focused
         if focused {
-            self.handle_keyboard_events(ui, &mut response);
+            self.handle_keyboard_events(ui, editor_id, &mut response);
         }
 
         // Tokens after edits, so the caret, hit testing, and glyphs share one layout.
@@ -358,7 +418,7 @@ impl<'a> SqlEditor<'a> {
             line_count: m.line_count,
             scroll,
             font_id: m.font_id,
-            tokens: &tokens,
+            tokens: tokens.as_ref(),
             highlighter: &highlighter,
             focused,
             editor_id,
@@ -385,7 +445,15 @@ impl<'a> SqlEditor<'a> {
         response.cursor_screen_pos = Pos2::new(cursor_screen.x, cursor_screen.y + frame.line_height);
 
         self.paint_ghost_text(ui, &frame, cursor_screen);
-        self.paint_caret(ui, &frame, response.changed, cursor_before, line_before, cursor_screen);
+        let preedit_cursor = self.paint_ime_preedit(ui, &frame, cursor_screen);
+        self.paint_caret(
+            ui,
+            &frame,
+            response.changed,
+            cursor_before,
+            line_before,
+            preedit_cursor.unwrap_or(cursor_screen),
+        );
 
         // Keep caret inside the viewport after edits / moves.
         scroll = self.scroll_caret_into_view(ui, &frame, scroll, max_scroll, cursor_screen);
@@ -853,6 +921,44 @@ impl<'a> SqlEditor<'a> {
 
     /// Caret bar with input-phase blink, plus the IME anchor rect that must
     /// stay put while the bar blinks off.
+    /// Paint the IME composition string at the caret.
+    ///
+    /// Returns the screen position just after the composition text so the caret
+    /// and candidate window follow the composing characters instead of staying
+    /// pinned at the buffer offset (#570).
+    fn paint_ime_preedit(&self, ui: &Ui, frame: &EditorFrame, cursor_screen: Pos2) -> Option<Pos2> {
+        if !frame.focused {
+            return None;
+        }
+        let preedit = read_ime_preedit(ui, frame.editor_id);
+        if preedit.is_empty() {
+            return None;
+        }
+        // Composition text is drawn where the commit will land, with the
+        // underline every IME shows while a composition is active.
+        let galley =
+            ui.painter()
+                .layout_no_wrap(preedit.text.clone(), frame.font_id.clone(), self.theme.text_primary);
+        let origin = cursor_screen;
+        let rect = Rect::from_min_size(origin, galley.size());
+        ui.painter().galley(origin, galley, self.theme.text_primary);
+        ui.painter().line_segment(
+            [
+                Pos2::new(rect.min.x, rect.max.y),
+                Pos2::new(rect.max.x, rect.max.y),
+            ],
+            Stroke::new(STROKE_THIN, self.theme.accent),
+        );
+        // Caret sits inside the composition string, at the IME's caret index.
+        let (before, _) = preedit.around_cursor();
+        let before_width = ui
+            .painter()
+            .layout_no_wrap(before, frame.font_id.clone(), self.theme.text_primary)
+            .size()
+            .x;
+        Some(Pos2::new(cursor_screen.x + before_width, cursor_screen.y))
+    }
+
     fn paint_caret(
         &self,
         ui: &Ui,
@@ -922,17 +1028,22 @@ impl<'a> SqlEditor<'a> {
     }
 
     /// Re-retokenize after edits; caret, hit testing, and glyphs share one layout.
-    fn fresh_tokens(&mut self) -> (SqlHighlighter, Vec<SyntaxToken>) {
-        if let Some(cache) = self.cached_tokens.as_mut() {
-            cache.get_or_recompute(self.buffer, self.dialect);
-        }
+    /// Tokens for this frame plus the highlighter that produced them.
+    ///
+    /// #581: this used to return `cache.tokens().to_vec()` — a full clone of the
+    /// document's token vector on every frame, including the ~500 ms caret-blink
+    /// repaints. The cached slice is borrowed instead; only the uncached path
+    /// (no `cached_tokens` handle) allocates, and it does so once per frame.
+    fn fresh_tokens(&mut self) -> (SqlHighlighter, std::sync::Arc<[SyntaxToken]>) {
         let highlighter = SqlHighlighter::new(self.dialect);
-        let tokens = if let Some(cache) = self.cached_tokens.as_deref() {
-            cache.tokens().to_vec()
-        } else {
-            highlighter.tokenize(self.buffer.text())
-        };
-        (highlighter, tokens)
+        let buffer = &*self.buffer;
+        if let Some(cache) = self.cached_tokens.as_deref_mut() {
+            // The token list is cached per document; every keystroke past the
+            // edit already reuses it, so a caret-blink repaint copies no tokens
+            // — only an `Arc` reference (#581).
+            return (highlighter, cache.shared(buffer, self.dialect));
+        }
+        (highlighter, highlighter.tokenize(self.buffer.text()).into())
     }
 
     /// Scroll just enough that the caret stays inside the viewport, then persist.
@@ -1034,11 +1145,42 @@ impl<'a> SqlEditor<'a> {
         ((rel_y / frame.line_height).floor() as usize).min(frame.line_count.saturating_sub(1))
     }
 
+    /// IME composition and commit (#570).
+    // cc-scan:allow TOO_MANY_PARAMS — event, frame context and response are all distinct concerns
+    ///
+    /// `Preedit` updates the composition state that the paint pass draws;
+    /// `Commit` inserts the text and clears it; every other IME event (blur,
+    /// cancellation, `Enabled`/`Disabled`) clears it so nothing lingers.
+    fn apply_ime_event(
+        &mut self,
+        event: &egui::ImeEvent,
+        ui: &Ui,
+        editor_id: Id,
+        response: &mut SqlEditorResponse,
+    ) {
+        let key = ime_preedit_key(editor_id);
+        if let egui::ImeEvent::Commit(text) = event {
+            if !text.is_empty() {
+                self.type_text(text);
+                response.changed = true;
+                response.wants_identifier_typed = is_single_identifier_char(text);
+                if text == "." {
+                    response.wants_completion = true;
+                }
+            }
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(key, ImePreedit::default()));
+            return;
+        }
+        let preedit = ImePreedit::from_event(event).unwrap_or_default();
+        ui.ctx().data_mut(|data| data.insert_temp(key, preedit));
+    }
+
     /// Keyboard input while the editor owns focus. The completion popup owns
     /// Enter/Tab while open; everything else mutates buffer/cursor/selection
     /// and folds into `response` for the caller.
     // cc-scan:allow COMPLEXITY,DEEP_NESTING,LONG_FUNCTION — event loop — one match arm per event kind
-    fn handle_keyboard_events(&mut self, ui: &Ui, response: &mut SqlEditorResponse) {
+    fn handle_keyboard_events(&mut self, ui: &Ui, editor_id: Id, response: &mut SqlEditorResponse) {
         let events = ui.input(|i| i.events.clone());
         let modifiers = ui.input(|i| i.modifiers);
         let cmd_or_ctrl = modifiers.command || modifiers.ctrl || modifiers.mac_cmd;
@@ -1073,15 +1215,7 @@ impl<'a> SqlEditor<'a> {
                         response.wants_completion = true;
                     }
                 }
-                Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => {
-                    self.type_text(&text);
-                    response.changed = true;
-                    response.wants_identifier_typed = is_single_identifier_char(&text);
-                    if text == "." {
-                        response.wants_completion = true;
-                    }
-                }
-                Event::Ime(_) => {}
+                Event::Ime(event) => self.apply_ime_event(&event, ui, editor_id, response),
                 Event::Cut if !self.selection.is_empty() => {
                     self.buffer.break_typing_group();
                     let (start, end) = self.selection.normalized();

@@ -97,11 +97,33 @@ pub struct ForeignKey {
     pub initially_deferred: bool,
 }
 
+/// What a relation in the `views` list actually is.
+///
+/// `information_schema.views` cannot describe the whole family: a materialized
+/// view (`relkind = 'm'`) and a foreign table (`relkind = 'f'`) are absent from
+/// it entirely, and an ordinary view is the only kind it reports. The kind has
+/// to travel with the entry so a DDL/clone path emits `CREATE MATERIALIZED VIEW`
+/// rather than a plain `CREATE VIEW` (#595).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    /// A plain SQL view (`relkind = 'v'`, `table_type = 'VIEW'`).
+    #[default]
+    View,
+    /// A materialized view (`relkind = 'm'`, PostgreSQL).
+    MaterializedView,
+    /// A foreign table (`relkind = 'f'`, PostgreSQL FDW).
+    ForeignTable,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub name: String,
     pub schema: String,
     pub definition: String,
+    /// `View` unless the provider reports a materialized view or foreign table.
+    #[serde(default)]
+    pub kind: RelationKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +138,18 @@ pub struct Trigger {
     #[serde(default)]
     pub function_def: String,
     pub enabled: bool,
+}
+
+impl Trigger {
+    /// Whether `definition` is the provider's authoritative `CREATE TRIGGER`
+    /// text rather than the action (`EXECUTE FUNCTION …`) alone.
+    ///
+    /// Consumers replay a complete definition byte for byte; a summary-only
+    /// definition has to be rebuilt, and rebuilding is lossy (#594).
+    pub fn is_complete_definition(&self) -> bool {
+        self.definition.trim_start().to_ascii_uppercase().starts_with("CREATE TRIGGER")
+            || self.definition.trim_start().to_ascii_uppercase().starts_with("CREATE CONSTRAINT TRIGGER")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +207,21 @@ pub struct IntrospectResult {
     pub views: Vec<View>,
     pub triggers: Vec<Trigger>,
     pub functions: Vec<Function>,
+    /// The provider's own `CREATE TABLE` text, where the provider stores one
+    /// (SQLite: `sqlite_master.sql`, verbatim). A table with an entry here is
+    /// reproduced byte for byte; rebuilding it from column metadata loses
+    /// `AUTOINCREMENT`, `COLLATE`, `WITHOUT ROWID`, `STRICT`, `ON CONFLICT` and
+    /// generated-column syntax (#596).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub table_definition_sql: Vec<TableDefinitionSql>,
+}
+
+/// One provider-stored `CREATE TABLE` statement.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableDefinitionSql {
+    pub schema: String,
+    pub table_name: String,
+    pub sql: String,
 }
 
 impl IntrospectResult {
@@ -188,7 +237,16 @@ impl IntrospectResult {
             views: Vec::new(),
             triggers: Vec::new(),
             functions: Vec::new(),
+            table_definition_sql: Vec::new(),
         }
+    }
+
+    /// The provider-stored `CREATE TABLE` text for one table, if there is one.
+    pub fn stored_table_definition(&self, schema: &str, table_name: &str) -> Option<&str> {
+        self.table_definition_sql
+            .iter()
+            .find(|entry| entry.schema == schema && entry.table_name == table_name)
+            .map(|entry| entry.sql.as_str())
     }
 }
 

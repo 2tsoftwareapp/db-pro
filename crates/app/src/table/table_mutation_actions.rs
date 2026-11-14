@@ -399,7 +399,7 @@ impl DbProApp {
         self.table.mutation.table_mutation_retry_after_reload = false;
         self.table.mutation.table_mutation_retry_target = None;
         if reload {
-            self.table.data_query.result = None;
+            self.table.data_query.clear_result();
             self.table.data_query.total_rows = None;
             self.table.data_query.error = None;
             self.request_table_data();
@@ -418,7 +418,7 @@ impl DbProApp {
             return;
         }
         self.table.mutation.table_mutation_error = None;
-        self.table.data_query.result = None;
+        self.table.data_query.clear_result();
         self.table.data_query.total_rows = None;
         self.table.data_query.error = None;
         self.request_table_data();
@@ -570,7 +570,7 @@ impl DbProApp {
             self.execute_pending_navigation(action);
             return;
         }
-        self.table.data_query.result = None;
+        self.table.data_query.clear_result();
         self.table.data_query.total_rows = None;
         self.table.data_query.error = None;
         self.request_table_data();

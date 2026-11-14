@@ -40,34 +40,46 @@ pub(super) fn build_create_table_ddl(
 }
 
 pub(super) fn format_trigger_ddl(trigger: &Trigger) -> String {
-    // SQLite: definition is the full CREATE TRIGGER SQL from sqlite_master.
-    // PostgreSQL: definition is action_statement (EXECUTE FUNCTION ...),
-    //   so emit the function definition first, then the CREATE TRIGGER.
-    if trigger.definition.to_ascii_uppercase().starts_with("CREATE TRIGGER") {
-        format!("{};\n", trigger.definition)
+    // Both providers report `definition` as the complete `CREATE TRIGGER`
+    // statement (SQLite straight from `sqlite_master`, PostgreSQL from
+    // `pg_get_triggerdef`), so it is replayed verbatim — never rebuilt from the
+    // summary columns. Rebuilding dropped `FOR EACH ROW`, `WHEN (...)`,
+    // `UPDATE OF col`, `REFERENCING` and `DEFERRABLE`, which silently turned a
+    // row-level trigger into a statement-level one (#594).
+    if trigger.is_complete_definition() {
+        return format!("{};\n", trigger.definition.trim().trim_end_matches(';'));
+    }
+
+    let dialect = DriverDialect::new(DriverType::Postgres);
+    let qualified = qualify(&dialect, &trigger.schema, &trigger.table_name);
+    let trigger_stmt = format!(
+        "CREATE TRIGGER {}\n  {} {} ON {}\n  {};\n",
+        dialect.quote_identifier(&trigger.name),
+        trigger.timing,
+        trigger.event,
+        qualified,
+        trigger.definition
+    );
+    if trigger.function_def.is_empty() {
+        trigger_stmt
     } else {
-        let dialect = DriverDialect::new(DriverType::Postgres);
-        let qualified = qualify(&dialect, &trigger.schema, &trigger.table_name);
-        let trigger_stmt = format!(
-            "CREATE TRIGGER {}\n  {} {} ON {}\n  {};\n",
-            dialect.quote_identifier(&trigger.name),
-            trigger.timing,
-            trigger.event,
-            qualified,
-            trigger.definition
-        );
-        if !trigger.function_def.is_empty() {
-            let mut ddl = String::new();
-            ddl.push_str(&trigger.function_def);
-            if !trigger.function_def.ends_with('\n') {
-                ddl.push('\n');
-            }
-            ddl.push('\n');
-            ddl.push_str(&trigger_stmt);
-            ddl
-        } else {
-            trigger_stmt
-        }
+        // `pg_get_functiondef` does not terminate its statement, so the `;` is
+        // added here — without it the function and the CREATE TRIGGER that
+        // followed it were one syntactically invalid statement (#594).
+        format!(
+            "{}\n\n{}",
+            trigger.function_def.trim().trim_end_matches(';'),
+            trigger_statement_with_semicolon(&trigger_stmt)
+        )
+    }
+}
+
+fn trigger_statement_with_semicolon(statement: &str) -> String {
+    let trimmed = statement.trim_end();
+    if trimmed.ends_with(';') {
+        statement.to_owned()
+    } else {
+        format!("{trimmed};\n")
     }
 }
 

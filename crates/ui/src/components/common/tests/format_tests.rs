@@ -46,3 +46,28 @@ fn format_percentage_handles_zero_denominator() {
     assert_eq!(format_percentage(1, 1), "100.0%");
     assert_eq!(format_percentage(0, 0), "0.0%");
 }
+
+#[test]
+fn fmt_opt_hides_rust_debug_syntax() {
+    // #569: the UI must never show `Some(…)` / `None`.
+    assert_eq!(fmt_opt(Some(5321)), "5321");
+    assert_eq!(fmt_opt(None::<u64>), VALUE_ABSENT);
+    assert_eq!(fmt_opt(Some("logical")), "logical");
+    assert!(!fmt_opt(None::<u64>).contains("None"));
+    assert!(!fmt_opt(Some(1)).contains("Some"));
+}
+
+#[test]
+fn fmt_opt_duration_millis_scales_units() {
+    assert_eq!(fmt_opt_duration_millis(None), VALUE_ABSENT);
+    assert_eq!(fmt_opt_duration_millis(Some(812)), "812ms");
+    assert_eq!(fmt_opt_duration_millis(Some(5_320)), "5.32s");
+    assert_eq!(fmt_opt_duration_millis(Some(134_000)), "2m 14s");
+}
+
+#[test]
+fn format_shown_total_reports_truncation_only_when_capped() {
+    assert_eq!(format_shown_total(20, 137), "Showing 20 of 137");
+    assert_eq!(format_shown_total(7, 7), "7");
+    assert_eq!(format_shown_total(0, 0), "0");
+}

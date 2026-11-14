@@ -206,24 +206,66 @@ pub fn csv_cell_from_display(value: &str, treat_empty_as_null_token: bool) -> St
 /// escape) before they hit a delimited writer, so attacker-controlled database text like
 /// `=HYPERLINK(...)` or `=cmd|'/c calc'!A1` survives an export as inert text instead of executing
 /// when the file is opened in Excel or LibreOffice.
-const CSV_FORMULA_PREFIXES: &[char] = &['=', '+', '-', '@', '\t', '\r', '\n', ' '];
+///
+/// A leading space is deliberately **not** in this list (#593): " value" is ordinary data, and
+/// prefixing it corrupted exported values and clipboard copies.
+const CSV_FORMULA_PREFIXES: &[char] = &['=', '+', '-', '@', '\t', '\r', '\n'];
+
+/// Whether a delimited write should neutralise spreadsheet formulas (#593).
+///
+/// `Raw` is RFC 4180 only — clipboard copies, TSV pastes and DB→file transfers that are meant to
+/// be re-imported (or pasted into psql/an editor) must not gain characters. `ExcelSafe` adds the
+/// formula guard for files a spreadsheet will open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DelimitedSafety {
+    /// No formula guard: values round-trip byte-for-byte.
+    Raw,
+    /// #429 guard: values a spreadsheet could evaluate are prefixed with `'`.
+    #[default]
+    ExcelSafe,
+}
 
 /// Returns `value` prefixed with `'` when a spreadsheet would evaluate it as a formula.
 ///
-/// A field whose whole text parses as an `f64` is exempt: `-42` or `+1.5` is a numeric literal every
-/// spreadsheet reads as a number, and quoting it as text would corrupt legitimate negative exports.
+/// Exempt values: anything that parses as an `f64` (`-42`, `+1.5` — spreadsheets read those as
+/// numbers) and phone-like strings (`+84 912 345 678`, `-`, `(555) 010-9999`) so a `+`/`-` lead
+/// character alone is not treated as a formula start (#593).
 /// Shared by every delimited write path (`DelimitedFileTarget`, service-level CSV renders, the
 /// result-grid CSV/TSV formatters) so the guard cannot drift between call sites.
 pub fn guard_csv_field(value: &str) -> std::borrow::Cow<'_, str> {
-    let starts_with_formula = value
-        .chars()
-        .next()
-        .is_some_and(|first| CSV_FORMULA_PREFIXES.contains(&first));
-    if starts_with_formula && value.parse::<f64>().is_err() {
-        std::borrow::Cow::Owned(format!("'{value}"))
-    } else {
-        std::borrow::Cow::Borrowed(value)
+    guard_csv_field_with(value, DelimitedSafety::ExcelSafe)
+}
+
+/// [`guard_csv_field`] with an explicit safety mode (#593).
+pub fn guard_csv_field_with(value: &str, safety: DelimitedSafety) -> std::borrow::Cow<'_, str> {
+    if safety == DelimitedSafety::Raw || !is_formula_like(value) {
+        return std::borrow::Cow::Borrowed(value);
     }
+    std::borrow::Cow::Owned(format!("'{value}"))
+}
+
+/// True when the value starts the way a spreadsheet formula does (#429/#593).
+fn is_formula_like(value: &str) -> bool {
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    if !CSV_FORMULA_PREFIXES.contains(&first) {
+        return false;
+    }
+    if value.parse::<f64>().is_ok() || is_phone_like(value) {
+        return false;
+    }
+    // `=` and `@` always open an expression; tab/CR/LF can shift a cell into
+    // formula position. `+`/`-` are only interesting when followed by more.
+    matches!(first, '=' | '@' | '\t' | '\r' | '\n')
+        || value.chars().nth(1).is_some_and(|next| !next.is_whitespace())
+}
+
+/// Digits, spaces and the punctuation a human writes in a phone number (#593).
+fn is_phone_like(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || matches!(ch, '+' | '-' | ' ' | '(' | ')' | '.'))
 }
 
 #[cfg(test)]

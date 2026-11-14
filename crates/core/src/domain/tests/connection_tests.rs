@@ -77,7 +77,8 @@ fn connection_config_validate_multiple_errors() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let errors = config.validate().unwrap_err();
     assert_eq!(errors.len(), 5);
 }
@@ -105,7 +106,8 @@ fn sqlite_does_not_require_host_port_username() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     assert!(config.validate().is_ok());
 }
 
@@ -138,7 +140,8 @@ fn sqlite_rejects_ssh_tunnel_configuration() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
 
     let errors = config.validate().unwrap_err();
     assert!(errors.iter().any(|error| error.field == "ssh_tunnel"));

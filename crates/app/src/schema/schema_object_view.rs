@@ -280,7 +280,7 @@ impl DbProApp {
             schema_object_surface_view::SchemaObjectSurfaceAction::SelectView(view) => {
                 self.schema.explorer.schema_object_view = view;
                 if view == SchemaObjectView::Data {
-                    self.table.data_query.result = None;
+                    self.table.data_query.clear_result();
                     self.table.data_query.total_rows = None;
                     self.table.data_query.error = None;
                     self.table.data_query.offset = 0;

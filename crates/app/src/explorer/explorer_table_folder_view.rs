@@ -53,13 +53,15 @@ impl TableFolderContext<'_> {
         let mut actions = Vec::new();
         let theme = self.theme;
         context_action_menu(ui, response, theme, |ui, close_menu| {
-            if ctx_menu_item(ui, Some(Icon::RefreshCw), "Refresh Schema", None, theme.text_primary, theme).clicked()
+            let refresh_label = t!("explorer.refresh_schema");
+            if ctx_menu_item(ui, Some(Icon::RefreshCw), &refresh_label, None, theme.text_primary, theme).clicked()
             {
                 actions.push(TableFolderAction::RefreshSchema);
                 *close_menu = true;
             }
             Separator::horizontal(theme).show(ui);
-            if ctx_menu_item(ui, Some(Icon::Copy), "Copy Schema Name", None, theme.text_primary, theme).clicked() {
+            let copy_label = t!("explorer.copy_schema_name");
+            if ctx_menu_item(ui, Some(Icon::Copy), &copy_label, None, theme.text_primary, theme).clicked() {
                 actions.push(TableFolderAction::CopySchemaName);
                 *close_menu = true;
             }
@@ -69,11 +71,11 @@ impl TableFolderContext<'_> {
 
     pub(crate) fn draw_empty_state(&self, ui: &mut egui::Ui) {
         let label = if self.total_tables == 0 {
-            "No tables in schema"
+            t!("explorer.no_tables")
         } else {
-            "No matching tables"
+            t!("explorer.no_matching_tables")
         };
-        draw_hint_row(ui, &self.theme, 4, Icon::Info, label);
+        draw_hint_row(ui, &self.theme, 4, Icon::Info, &label);
     }
 
     pub(crate) fn draw_offscreen_row_spacer(&self, ui: &mut egui::Ui) {
@@ -90,7 +92,11 @@ impl TableFolderContext<'_> {
                 &self.theme,
                 4,
                 Icon::Ellipsis,
-                &format!("Showing {} of {} — refine filter", visible_count, self.matching_tables),
+                &t!(
+                    "explorer.showing_filtered",
+                    shown = visible_count,
+                    total = self.matching_tables
+                ),
             );
         }
     }

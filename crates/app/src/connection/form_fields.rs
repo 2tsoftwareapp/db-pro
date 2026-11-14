@@ -3,6 +3,7 @@
 // egui painter/view file: fns are linear layout code; branches are per-state paint variants.
 use super::config::*;
 use super::layout::*;
+use crate::UiDriver;
 use crate::components::input::{Input, PasswordInput};
 use crate::components::selection::Checkbox;
 use crate::components::tabs::SegmentedTabs;
@@ -114,6 +115,16 @@ impl<'view, 'bridge> super::view::ConnectionDialogView<'view, 'bridge> {
                                 self.theme,
                             )
                             .show(ui);
+                            // SQLite: creating the file is a separate, explicit
+                            // decision from opening one (#597).
+                            if self.dialog.draft.driver == UiDriver::Sqlite {
+                                Checkbox::new(
+                                    &mut self.dialog.draft.create_if_missing,
+                                    t!("connection.create_if_missing").as_ref(),
+                                    self.theme,
+                                )
+                                .show(ui);
+                            }
                             if is_production {
                                 ui.label(
                                     RichText::new(t!("connection.production_guard"))

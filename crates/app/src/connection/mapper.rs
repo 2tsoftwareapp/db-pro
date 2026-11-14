@@ -72,6 +72,7 @@ pub fn summary_to_edit_draft(connection: &UiConnectionSummary) -> UiConnectionDr
         driver: ui_driver_from_str(&connection.driver),
         ssl_mode: connection.ssl_mode,
         readonly: connection.readonly,
+        create_if_missing: connection.create_if_missing,
         group: connection.group.clone().unwrap_or_default(),
         tags: connection.tags.join(", "),
         favorite: connection.favorite,
@@ -196,6 +197,7 @@ pub fn draft_to_domain_config(draft: &UiConnectionDraft) -> ConnectionConfig {
             _ => ConnectionEnvironment::Development,
         },
         readonly: draft.readonly,
+        create_if_missing: draft.create_if_missing,
     }
 }
 

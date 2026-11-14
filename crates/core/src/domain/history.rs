@@ -12,6 +12,13 @@ pub struct QueryHistory {
     pub row_count: u64,
     pub database: Option<String>,
     pub schema: Option<String>,
+    /// Whether the statement completed without error (#600).
+    ///
+    /// Failed statements are stored too: history is most valuable exactly when the
+    /// SQL has to be fixed and re-run.
+    pub success: bool,
+    /// Server error text for a failed statement, already credential-redacted (#600).
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

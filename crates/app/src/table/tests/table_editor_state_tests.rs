@@ -16,6 +16,7 @@
             RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("1".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
         );
         state.mutation.pending_changes_open = true;

@@ -8,7 +8,11 @@ use super::*;
 
 #[derive(Debug)]
 pub(crate) struct TableDataQueryState {
-    pub(super) result: Option<UiQueryResult>,
+    /// Shared handle to the visible grid (#582).
+    ///
+    /// The shell output panel used to `Rc::new(result.clone())` here on every
+    /// frame; storing the `Rc` directly makes that a refcount bump.
+    pub(super) result: Option<std::rc::Rc<UiQueryResult>>,
     pub(super) total_rows: Option<u64>,
     pub(super) offset: u64,
     pub(super) limit: u64,
@@ -305,3 +309,30 @@ impl TableDataQueryState {
 #[path = "tests/table_data_query_state_tests.rs"]
 mod tests;
 
+impl TableDataQueryState {
+    /// Shared handle to the grid (#582) — refcount bump, never a deep clone.
+    pub(super) fn result_handle(&self) -> Option<std::rc::Rc<UiQueryResult>> {
+        self.result.clone()
+    }
+
+    /// Borrow the grid.
+    pub(super) fn result_ref(&self) -> Option<&UiQueryResult> {
+        self.result.as_deref()
+    }
+
+    /// Install a freshly loaded grid.
+    pub(super) fn set_result(&mut self, result: UiQueryResult) {
+        self.result = Some(std::rc::Rc::new(result));
+    }
+
+    /// Drop the grid.
+    pub(super) fn clear_result(&mut self) {
+        self.result = None;
+    }
+
+    /// Mutable access to the grid. Callers that mutate a shared result must
+    /// clone first (`Rc::make_mut` inside `result_handle_mut`).
+    pub(super) fn result_mut(&mut self) -> Option<&mut UiQueryResult> {
+        self.result.as_mut().map(std::rc::Rc::make_mut)
+    }
+}

@@ -4,9 +4,10 @@ use crate::domain::connection::{ConnectionConfig, ConnectionId, DriverType};
 use crate::domain::error::DbError;
 use crate::domain::routine_debug::{RoutineDebugProbe, DEBUG_CAPABILITY_PROBE_SQL};
 use crate::domain::safety::{validate_against_policy, ConnectionSafetyPolicy};
-use crate::domain::schema::{IntrospectResult, TableInfo};
+use crate::domain::schema::{IntrospectResult, RelationKind, TableInfo, View};
 use crate::ports::{ConnectionRepository, DbConnector, IntrospectionCache};
 
+use super::driver_dialect::DriverDialect;
 use super::registry::ConnectionRegistry;
 use super::sql_policy::{placeholder_remains, split_statements_for_driver};
 use schema_ddl::{build_create_table_ddl, format_trigger_ddl};
@@ -170,9 +171,10 @@ impl SchemaService {
     ) -> Result<String, DbError> {
         let introspect = self.introspect(connection_id, false).await?;
 
-        // Check if this is a view first — views use their stored definition.
+        // Views, materialized views and foreign tables carry their own
+        // definition; only an ordinary table is rebuilt from metadata (#595).
         if let Some(view) = introspect.views.iter().find(|v| v.schema == schema && v.name == table) {
-            return Ok(format!("{};\n", view.definition));
+            return Ok(format_relation_ddl(view));
         }
 
         let tbl = introspect
@@ -181,6 +183,23 @@ impl SchemaService {
             .find(|t| t.schema == schema && t.name == table)
             .ok_or_else(|| DbError::NotFound(format!("table or view {schema}.{table}")))?
             .clone();
+
+        // SQLite keeps the original CREATE TABLE text, which is the only source
+        // that survives `AUTOINCREMENT`, `COLLATE`, `WITHOUT ROWID`, `STRICT`,
+        // `ON CONFLICT` and generated columns (#596). Rebuilding from metadata
+        // is the fallback for providers that store nothing.
+        if let Some(stored) = introspect.stored_table_definition(schema, table) {
+            let mut ddl = format!("{};\n", stored.trim().trim_end_matches(';'));
+            for trigger in introspect
+                .triggers
+                .iter()
+                .filter(|trigger| trigger.table_name == table && trigger.schema == schema)
+            {
+                ddl.push_str(&format_trigger_ddl(trigger));
+                ddl.push('\n');
+            }
+            return Ok(ddl);
+        }
 
         let check_constraints: Vec<_> = introspect
             .check_constraints
@@ -308,8 +327,42 @@ fn reject_unexpanded_placeholder(sql: &str) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Every relation kind a schema tree can be built from, so a database that only
+/// holds materialized views or foreign tables is not mistaken for an empty one.
 fn cached_schema_is_empty(cached: &IntrospectResult) -> bool {
-    cached.tables.is_empty() && cached.views.is_empty() && cached.triggers.is_empty()
+    cached.tables.is_empty()
+        && cached.views.is_empty()
+        && cached.triggers.is_empty()
+        && cached.functions.is_empty()
+        && cached.indexes.is_empty()
+}
+
+/// The `CREATE` statement for a view-like relation, per its provider kind.
+///
+/// A materialized view needs `CREATE MATERIALIZED VIEW … AS <query>`; emitting
+/// the plain `CREATE VIEW` spelling — or the bare query — would not reproduce the
+/// object the user sees in the explorer (#595).
+fn format_relation_ddl(view: &View) -> String {
+    let query = view.definition.trim().trim_end_matches(';');
+    match view.kind {
+        RelationKind::View => format!("{query};\n"),
+        RelationKind::MaterializedView => {
+            let dialect = DriverDialect::new(DriverType::Postgres);
+            format!(
+                "CREATE MATERIALIZED VIEW {} AS\n{query};\n",
+                crate::application::sql_builder::qualify(&dialect, &view.schema, &view.name)
+            )
+        }
+        RelationKind::ForeignTable => {
+            // Introspection knows the relation and its FDW options, not the
+            // column list or the server name, so the definition is reported as
+            // what it is instead of a `CREATE VIEW` that would be wrong.
+            format!(
+                "-- foreign table {}.{}\n-- options: {}\n",
+                view.schema, view.name, view.definition
+            )
+        }
+    }
 }
 
 fn sqlite_file_matches_cached_schema(database: &str, cached: &IntrospectResult) -> bool {

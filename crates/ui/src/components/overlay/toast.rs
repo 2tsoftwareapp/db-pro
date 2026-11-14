@@ -251,6 +251,12 @@ pub struct ToastItem {
     pub action_label: Option<String>,
     pub duration_secs: f32,
     pub elapsed_secs: f32,
+    /// Errors stay until dismissed or the user moves on: a 5 s timer hid the
+    /// message before anyone could read or copy it (#571).
+    pub persistent: bool,
+    /// Set while the pointer is over the toast or it holds keyboard focus, so
+    /// the countdown pauses instead of expiring mid-read (#571).
+    pub hovered: bool,
 }
 
 /// Multi-toast manager supporting simultaneous queued/stacked toasts across all positions.
@@ -282,6 +288,7 @@ impl ToastManager {
                 && existing.action_label == item.action_label
         }) {
             existing.elapsed_secs = 0.0;
+            existing.hovered = false;
             return existing.id;
         }
         let id = item.id;
@@ -312,12 +319,47 @@ impl ToastManager {
     /// toasts expiring even while the surface that renders them is hidden.
     pub fn tick(&mut self, dt_secs: f32) {
         for item in &mut self.toasts {
+            if item.hovered || item.persistent {
+                continue;
+            }
             item.elapsed_secs += dt_secs.max(0.0);
         }
-        self.toasts.retain(|item| item.elapsed_secs < item.duration_secs);
+        self.toasts
+            .retain(|item| item.persistent || item.hovered || item.elapsed_secs < item.duration_secs);
+    }
+
+    /// Mark a toast as hovered/focused for the next [`Self::tick`].
+    pub fn set_hovered(&mut self, id: u64, hovered: bool) {
+        if let Some(item) = self.toasts.iter_mut().find(|item| item.id == id) {
+            item.hovered = hovered;
+        }
     }
 
     pub fn show(&mut self, message: impl Into<String>, variant: ToastVariant, position: ToastPosition) -> u64 {
+        // Errors are sticky by default: the status line has a single slot, so an
+        // error that disappears leaves no trace of what failed (#571).
+        let persistent = variant == ToastVariant::Danger;
+        self.show_with_duration(message, variant, position, persistent, DURATION_TOAST_DEFAULT_SECS)
+    }
+
+    /// Info/success toasts can opt into the manual-dismiss behaviour as well.
+    pub fn show_persistent(
+        &mut self,
+        message: impl Into<String>,
+        variant: ToastVariant,
+        position: ToastPosition,
+    ) -> u64 {
+        self.show_with_duration(message, variant, position, true, DURATION_TOAST_DEFAULT_SECS)
+    }
+
+    fn show_with_duration(
+        &mut self,
+        message: impl Into<String>,
+        variant: ToastVariant,
+        position: ToastPosition,
+        persistent: bool,
+        duration_secs: f32,
+    ) -> u64 {
         let id = self.next_item();
         self.push(ToastItem {
             id,
@@ -325,8 +367,10 @@ impl ToastManager {
             variant,
             position,
             action_label: None,
-            duration_secs: DURATION_TOAST_DEFAULT_SECS,
+            duration_secs,
             elapsed_secs: 0.0,
+            persistent,
+            hovered: false,
         })
     }
 
@@ -346,6 +390,8 @@ impl ToastManager {
             action_label: Some(action.into()),
             duration_secs: config::TOAST_ACTION_DURATION_SECS,
             elapsed_secs: 0.0,
+            persistent: false,
+            hovered: false,
         })
     }
 
@@ -353,8 +399,22 @@ impl ToastManager {
         self.show(message, ToastVariant::Success, position)
     }
 
+    /// Errors are persistent (#571) and carry a copy action so the message can
+    /// be pasted into a bug report after the toast is dismissed.
     pub fn error(&mut self, message: impl Into<String>, position: ToastPosition) -> u64 {
-        self.show(message, ToastVariant::Danger, position)
+        let message = message.into();
+        let id = self.next_item();
+        self.push(ToastItem {
+            id,
+            message,
+            variant: ToastVariant::Danger,
+            position,
+            action_label: Some(config::TOAST_COPY_ACTION_LABEL.to_owned()),
+            duration_secs: DURATION_TOAST_DEFAULT_SECS,
+            elapsed_secs: 0.0,
+            persistent: true,
+            hovered: false,
+        })
     }
 
     pub fn info(&mut self, message: impl Into<String>, position: ToastPosition) -> u64 {
@@ -450,10 +510,24 @@ impl ToastManager {
                         resp = toast_widget.show(ui);
                     });
 
+                // Pause the countdown while the toast is hovered (#571).
+                self.set_hovered(item.id, ctx.pointer_hover_pos().is_some_and(|pos| {
+                    ctx.memory(|memory| memory.area_rect(egui::Id::new(("toast_manager", item.id))))
+                        .is_some_and(|rect| rect.contains(pos))
+                }));
+
                 if resp.dismiss_clicked {
                     to_dismiss.push(item.id);
                 }
                 if resp.action_clicked {
+                    // The error toast's action copies the message (#571) so it
+                    // survives dismissal.
+                    if item.persistent {
+                        let message = item.message.clone();
+                        ctx.output_mut(|output| {
+                            output.commands.push(egui::OutputCommand::CopyText(message.clone()));
+                        });
+                    }
                     results.push((item.id, resp));
                 }
             }
@@ -471,3 +545,7 @@ impl ToastManager {
         self.render_ctx(ui.ctx(), theme)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/toast_tests.rs"]
+mod tests;

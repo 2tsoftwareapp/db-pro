@@ -16,6 +16,29 @@ pub enum TransferStatus {
     Partial,
 }
 
+impl TransferStatus {
+    /// Human-readable label for progress messages.
+    ///
+    /// Views used to print the enum with `{:?}`, so the transfer panel showed
+    /// `· Succeeded ·` with Rust's variant spelling (#569).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::Running => "Running",
+            Self::Succeeded => "Succeeded",
+            Self::Failed => "Failed",
+            Self::Cancelled => "Cancelled",
+            Self::Partial => "Partially succeeded",
+        }
+    }
+}
+
+impl std::fmt::Display for TransferStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferSourceKind {

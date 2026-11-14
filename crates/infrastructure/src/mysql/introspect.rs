@@ -72,6 +72,7 @@ impl MySqlIntrospect {
             views,
             triggers,
             functions,
+            table_definition_sql: Vec::new(),
         })
     }
 
@@ -302,6 +303,7 @@ impl MySqlIntrospect {
                 name: info(row, "table_name"),
                 schema: database.to_owned(),
                 definition: info::<Option<String>>(row, "view_definition").unwrap_or_default(),
+                kind: RelationKind::View,
             })
             .collect();
 

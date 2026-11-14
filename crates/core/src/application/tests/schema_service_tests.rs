@@ -30,7 +30,8 @@ fn connections_for(driver: DriverType) -> MockConnectionRepository {
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        }))
+            create_if_missing: false,
+}))
     });
     repo
 }
@@ -93,6 +94,7 @@ fn test_introspect_result() -> IntrospectResult {
             name: "active_users".into(),
             schema: "public".into(),
             definition: "SELECT id, email FROM users WHERE active = true".into(),
+            kind: Default::default(),
         }],
         triggers: vec![Trigger {
             name: "audit_insert".into(),
@@ -106,6 +108,7 @@ fn test_introspect_result() -> IntrospectResult {
         }],
         check_constraints: vec![],
         functions: vec![],
+        table_definition_sql: vec![],
     }
 }
 
@@ -183,6 +186,7 @@ async fn introspect_discards_sqlite_cache_when_database_file_is_empty() {
             triggers: vec![],
             check_constraints: vec![],
             functions: vec![],
+            table_definition_sql: vec![],
         })
     });
 
@@ -210,7 +214,8 @@ async fn introspect_discards_sqlite_cache_when_database_file_is_empty() {
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        }))
+            create_if_missing: false,
+}))
     });
 
     let svc = SchemaService::new(
@@ -553,6 +558,8 @@ fn format_trigger_ddl_reconstructs_from_parts() {
 
 #[test]
 fn format_trigger_ddl_includes_function_def_when_present() {
+    // PostgreSQL's `pg_get_triggerdef` output, so the definition is replayed as-is.
+    let full_sql = "CREATE TRIGGER tr_audit AFTER INSERT ON public.users FOR EACH ROW EXECUTE FUNCTION audit_fn()";
     let func_body = "CREATE FUNCTION audit_fn() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql";
     let trigger = Trigger {
         name: "tr_audit".into(),
@@ -560,19 +567,58 @@ fn format_trigger_ddl_includes_function_def_when_present() {
         schema: "public".into(),
         timing: "AFTER".into(),
         event: "INSERT".into(),
-        definition: "EXECUTE FUNCTION audit_fn()".into(),
+        definition: full_sql.into(),
         function_def: func_body.into(),
         enabled: true,
     };
     let ddl = format_trigger_ddl(&trigger);
-    assert!(ddl.contains("CREATE TRIGGER"));
-    assert!(ddl.contains("EXECUTE FUNCTION audit_fn()"));
-    assert!(ddl.contains("CREATE FUNCTION audit_fn()"));
-    assert!(ddl.contains("RETURN NEW"));
-    // Function definition must come BEFORE the CREATE TRIGGER statement.
+    assert!(ddl.contains(full_sql), "{ddl}");
+    // The function body is emitted first, and both statements end with `;`.
     let func_pos = ddl.find("CREATE FUNCTION").unwrap();
     let trigger_pos = ddl.find("CREATE TRIGGER").unwrap();
-    assert!(func_pos < trigger_pos, "function_def must preced CREATE TRIGGER");
+    assert!(func_pos < trigger_pos, "function_def must precede CREATE TRIGGER");
+    assert_eq!(ddl.matches(';').count(), 2, "{ddl}");
+}
+
+#[test]
+fn format_trigger_ddl_never_drops_row_level_clauses() {
+    let full_sql = concat!(
+        "CREATE TRIGGER tr_touch BEFORE INSERT OR UPDATE OF name ON public.t ",
+        "FOR EACH ROW WHEN ((new.name IS NOT NULL)) EXECUTE FUNCTION touch()"
+    );
+    let trigger = Trigger {
+        name: "tr_touch".into(),
+        table_name: "t".into(),
+        schema: "public".into(),
+        timing: "BEFORE".into(),
+        event: "INSERT OR UPDATE".into(),
+        definition: full_sql.into(),
+        function_def: String::new(),
+        enabled: true,
+    };
+    assert_eq!(format_trigger_ddl(&trigger), format!("{full_sql};\n"));
+}
+
+#[test]
+fn format_trigger_ddl_adds_the_missing_semicolon_after_a_function_body() {
+    // Summary-only definition (the pre-#594 shape) must still rebuild with a
+    // terminator after the function body, so the trigger parses on replay.
+    let func_body = "CREATE FUNCTION touch() RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$ LANGUAGE plpgsql";
+    let trigger = Trigger {
+        name: "tr_touch".into(),
+        table_name: "t".into(),
+        schema: "public".into(),
+        timing: "BEFORE".into(),
+        event: "UPDATE".into(),
+        definition: "EXECUTE FUNCTION touch()".into(),
+        function_def: func_body.into(),
+        enabled: true,
+    };
+    let ddl = format_trigger_ddl(&trigger);
+    assert!(ddl.contains("LANGUAGE plpgsql"), "{ddl}");
+    // `;` closes the function, `;` closes the rebuilt CREATE TRIGGER.
+    assert_eq!(ddl.matches(';').count(), 2, "{ddl}");
+    assert!(ddl.trim_end().ends_with(';'), "{ddl}");
 }
 
 #[test]

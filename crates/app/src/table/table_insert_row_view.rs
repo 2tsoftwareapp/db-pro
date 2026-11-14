@@ -42,24 +42,22 @@ impl DbProApp {
     }
 
     pub(crate) fn submit_insert_row(&mut self) {
-        let Some(table) = self.schema.explorer.selected_table.clone() else {
-            self.table.editing.insert_row_error = "Select a table before inserting a row".to_owned();
-            return;
-        };
-        let Some(info) = self.table.state.table_info.clone() else {
-            self.table.editing.insert_row_error = "Table structure is still loading".to_owned();
-            return;
+        let (table, info) = match self.insert_row_targets() {
+            Ok(targets) => targets,
+            Err(error) => return self.reject_insert_row(error),
         };
         let (columns, values) =
             match table_editor_values::parse_insert_row_values(&info, &self.table.editing.insert_row_values) {
                 Ok(parsed) => parsed,
-                Err(error) => {
-                    self.table.editing.insert_row_error = error;
-                    return;
-                }
+                Err(error) => return self.reject_insert_row(error),
             };
         self.table.mutation.staged_changes.ensure_target(&table);
-        self.table.mutation.staged_changes.stage_insert(columns, values);
+        // #587: carry the column types so INSERT values are typed, not sniffed.
+        let data_types = insert_column_types(&info, &columns);
+        self.table
+            .mutation
+            .staged_changes
+            .stage_insert_typed(columns, data_types, values);
         self.table.editing.insert_row_open = false;
         self.table.editing.insert_row_error.clear();
         self.feedback.runtime_message = format!("Row staged for {}", table);
@@ -150,5 +148,42 @@ impl DbProApp {
                 self.table.editing.insert_row_discard_confirmation = false;
             }
         }
+    }
+}
+
+/// Column types for a staged insert, in `columns` order (#587).
+fn insert_column_types(info: &crate::UiTableInfo, columns: &[String]) -> Vec<String> {
+    columns
+        .iter()
+        .map(|column| {
+            info.columns
+                .iter()
+                .find(|candidate| candidate.name == *column)
+                .map_or_else(String::new, |candidate| candidate.data_type.clone())
+        })
+        .collect()
+}
+
+impl DbProApp {
+    /// Report a rejected insert and keep the dialog open (#587 refactor).
+    fn reject_insert_row(&mut self, error: String) {
+        self.table.editing.insert_row_error = error;
+    }
+
+    /// Resolve the table/info pair `submit_insert_row` needs (#587).
+    fn insert_row_targets(&self) -> Result<(String, crate::UiTableInfo), String> {
+        let table = self
+            .schema
+            .explorer
+            .selected_table
+            .clone()
+            .ok_or_else(|| "Select a table before inserting a row".to_owned())?;
+        let info = self
+            .table
+            .state
+            .table_info
+            .clone()
+            .ok_or_else(|| "Table structure is still loading".to_owned())?;
+        Ok((table, info))
     }
 }

@@ -66,6 +66,8 @@ pub const TOAST_ACTION_RADIUS: f32 = 5.0;
 pub const TOAST_CLOSE_GAP: f32 = 6.0;
 /// Auto-dismiss duration for toasts that carry an action button.
 pub const TOAST_ACTION_DURATION_SECS: f32 = 8.0;
+/// Label of the copy action attached to error toasts (#571).
+pub const TOAST_COPY_ACTION_LABEL: &str = "Copy";
 pub const TOAST_ACCENT_WIDTH: f32 = 3.0;
 pub const TOAST_STACK_OFFSET: f32 = 54.0;
 pub const TOAST_SCREEN_MARGIN: f32 = 24.0;

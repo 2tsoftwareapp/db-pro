@@ -57,8 +57,8 @@ impl DbProApp {
             ui.centered_and_justified(|ui| {
                 EmptyState::new(
                     Icon::CircleCheck,
-                    "Statement completed",
-                    "This statement did not return any rows to display.",
+                    &t!("result_grid.statement_completed"),
+                    &t!("result_grid.statement_completed_desc"),
                     self.theme,
                 )
                 .show(ui);

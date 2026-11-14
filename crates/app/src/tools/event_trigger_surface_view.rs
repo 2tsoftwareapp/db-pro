@@ -5,6 +5,10 @@
 use super::super::event_trigger_state::{EventTriggerApply, EventTriggerState};
 use super::super::*;
 
+/// Event-trigger rows painted per frame (#569).
+const EVENT_TRIGGER_ROW_CAP: usize = 50;
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum EventTriggerSurfaceAction {
     Refresh,
@@ -86,7 +90,13 @@ impl EventTriggerSurfaceContext<'_> {
                 .small()
                 .color(self.theme.text_secondary),
         );
-        for trigger in inventory.triggers.iter().take(50) {
+        // #569: disclose the cap.
+        if let Some(hint) =
+            crate::components::common::shown_total_hint(EVENT_TRIGGER_ROW_CAP, inventory.triggers.len())
+        {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
+        for trigger in inventory.triggers.iter().take(EVENT_TRIGGER_ROW_CAP) {
             self.draw_trigger(ui, trigger, actions);
         }
     }

@@ -6,12 +6,55 @@
 use super::*;
 use std::collections::HashSet;
 
+/// How many rows are sampled when auto-sizing a column. Enough to catch the
+/// widest realistic value without walking a 100k-row page.
+const AUTO_SIZE_SAMPLE_ROWS: usize = 200;
+/// Horizontal padding added around text (cell padding + sort indicator room).
+const AUTO_SIZE_PADDING: f32 = 24.0;
+/// Width of the auto-size measurement unit — see [`measured_text_width`].
+const AUTO_SIZE_UNIT_WIDTH: f32 = 7.4;
+pub(crate) const AUTO_SIZE_MIN_WIDTH: f32 = 60.0;
+pub(crate) const AUTO_SIZE_MAX_WIDTH: f32 = 520.0;
+
+/// Estimated rendered width of `text` in the grid font.
+///
+/// #575: the old estimate was `chars × 7`, which under-measures every CJK glyph
+/// (~1.7 units), emoji and combining Vietnamese sequence while over-measuring
+/// `i`/`l`. ASCII stays a flat unit; everything else is weighted by the
+/// approximate advance of the bundled Inter/CJK fallback stack.
+pub(crate) fn measured_text_width(text: &str) -> f32 {
+    text.chars().map(char_width_units).sum::<f32>() * AUTO_SIZE_UNIT_WIDTH
+}
+
+/// Approximate advance width in [`AUTO_SIZE_UNIT_WIDTH`] units.
+fn char_width_units(character: char) -> f32 {
+    match character as u32 {
+        // Narrow ASCII: i l j . , ' | ! : ; and the space.
+        0x20 | 0x21 | 0x27 | 0x2C | 0x2E | 0x3A | 0x3B | 0x69 | 0x6A | 0x6C | 0x7C => 0.5,
+        // Wide ASCII: m w M W @.
+        0x40 | 0x4D | 0x57 | 0x6D | 0x77 => 1.4,
+        0x00..=0x7F => 1.0,
+        // Combining marks render inside the previous cluster.
+        0x0300..=0x036F => 0.0,
+        // CJK ideographs, kana, hangul, fullwidth forms: two Latin cells.
+        0x1100..=0x115F | 0x2E80..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF | 0xFE30..=0xFE6F
+        | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFD => 2.0,
+        // Emoji and other wide symbols.
+        0x1F300..=0x1FAFF | 0x2600..=0x27BF => 1.8,
+        // Latin Extended Additional (Vietnamese) sits slightly wider than ASCII.
+        0x1E00..=0x1EFF => 1.1,
+        _ => 1.0,
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct TableDataState {
     pub(super) grid_filter: String,
     pub(super) grid_sort_column: Option<usize>,
     pub(super) grid_sort_desc: bool,
     pub(super) grid_column_widths: Vec<f32>,
+    /// Last viewport width handed to [`Self::column_widths`].
+    pub(super) last_available_width: f32,
     pub(super) grid_column_order: Vec<usize>,
     pub(super) grid_hidden_columns: BTreeSet<usize>,
     pub(super) grid_layout_preferences: HashMap<String, PersistedGridLayout>,
@@ -178,19 +221,30 @@ impl TableDataState {
         if self.grid_column_widths.len() < result.columns.len() {
             self.grid_column_widths.resize(result.columns.len(), 180.0);
         }
+        // #575: sizing one column changed every other column. Before the first
+        // resize, `column_widths` returns *computed* fill widths without storing
+        // them, so flipping `grid_columns_user_resized` here made the rest animate
+        // from their fill width back to the 180 px default. Snapshot the widths
+        // actually on screen first, then change only the target column.
+        if !self.grid_columns_user_resized {
+            self.grid_column_widths = self.column_widths(result.columns.len(), self.last_available_width);
+        }
         let column = &result.columns[column_index];
         let content_width = indexes
             .iter()
-            .take(100)
+            .take(AUTO_SIZE_SAMPLE_ROWS)
             .filter_map(|row_index| result.rows.get(*row_index).and_then(|row| row.get(column_index)))
-            .map(crate::cell_text)
-            .map(|value| value.chars().count() as f32 * 7.0 + 24.0)
-            .fold(column.name.chars().count() as f32 * 7.0 + 42.0, f32::max);
-        self.grid_column_widths[column_index] = content_width.clamp(60.0, 520.0);
+            // `cell_text_as_str` borrows — no allocation per sampled row.
+            .map(|cell| measured_text_width(crate::cell_text_as_str(cell)))
+            .fold(measured_text_width(&column.name) + AUTO_SIZE_PADDING, f32::max);
+        self.grid_column_widths[column_index] = content_width.clamp(AUTO_SIZE_MIN_WIDTH, AUTO_SIZE_MAX_WIDTH);
         self.grid_columns_user_resized = true;
     }
 
     pub(crate) fn column_widths(&mut self, count: usize, available_width: f32) -> Vec<f32> {
+        // Remembered so `auto_size_column` can snapshot the widths currently on
+        // screen instead of the untouched 180 px defaults (#575).
+        self.last_available_width = available_width;
         if self.grid_column_widths.len() != count {
             self.grid_column_widths = vec![180.0; count];
             self.grid_columns_user_resized = false;
@@ -269,13 +323,32 @@ impl TableDataState {
             .rows
             .get(row_index)
             .ok_or_else(|| "The selected row is no longer available".to_owned())?;
-        Self::row_identity_from_row(row, &key, &column_indexes)
+        let data_types = Self::key_data_types(result, &key, &column_indexes);
+        Self::row_identity_from_row(row, &key, &column_indexes, &data_types)
+    }
+
+    /// Column types for the identity key, in key order (#587).
+    fn key_data_types(
+        result: &UiQueryResult,
+        key: &IdentityKey,
+        column_indexes: &HashMap<&str, usize>,
+    ) -> Vec<String> {
+        key.columns
+            .iter()
+            .map(|column| {
+                column_indexes
+                    .get(column.as_str())
+                    .and_then(|index| result.columns.get(*index))
+                    .map_or_else(String::new, |column| column.data_type.clone())
+            })
+            .collect()
     }
 
     fn row_identity_from_row(
         row: &[UiCell],
         key: &IdentityKey,
         column_indexes: &HashMap<&str, usize>,
+        data_types: &[String],
     ) -> Result<RowIdentity, String> {
         let mut pk_values = Vec::with_capacity(key.columns.len());
         for pk_column in &key.columns {
@@ -300,6 +373,7 @@ impl TableDataState {
         Ok(RowIdentity {
             original_pk_columns: key.columns.clone(),
             original_pk_values: pk_values,
+            original_pk_data_types: data_types.to_vec(),
         })
     }
 
@@ -318,8 +392,9 @@ impl TableDataState {
             .enumerate()
             .map(|(index, column)| (column.name.as_str(), index))
             .collect();
+        let data_types = Self::key_data_types(result, &key, &column_indexes);
         for (row_index, row) in result.rows.iter().enumerate() {
-            if let Ok(identity) = Self::row_identity_from_row(row, &key, &column_indexes) {
+            if let Ok(identity) = Self::row_identity_from_row(row, &key, &column_indexes, &data_types) {
                 self.grid_row_identity_cache.insert(row_index, identity);
             }
         }
@@ -638,6 +713,10 @@ impl TableDataState {
         self.invalidate_grid_projection();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/table_auto_size_tests.rs"]
+mod auto_size_tests;
 
 #[cfg(test)]
 #[path = "tests/table_data_state_tests.rs"]

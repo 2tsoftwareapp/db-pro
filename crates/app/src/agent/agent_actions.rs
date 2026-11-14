@@ -47,7 +47,7 @@ impl DbProApp {
             .query
             .session
             .active_result()
-            .or(self.table.data_query.result.as_ref())
+            .or(self.table.data_query.result_ref())
             .map(|result| format!("{} rows returned in {} ms", result.row_count, result.duration_ms));
         let last_error = self.has_runtime_error().then(|| self.feedback.runtime_message.clone());
 

@@ -1,5 +1,7 @@
 use crate::domain::connection::DriverType;
-use crate::domain::safety::{backslash_escapes_for_driver, has_top_level_sql_keyword};
+use crate::domain::safety::{
+    backslash_escapes_for_driver, effective_statement_keyword, has_top_level_operator, has_top_level_sql_keyword,
+};
 
 pub(super) enum StatementClass {
     Read,
@@ -8,10 +10,9 @@ pub(super) enum StatementClass {
 
 pub(super) fn classify_statement(sql: &str, driver: DriverType) -> StatementClass {
     let backslash_escapes = backslash_escapes_for_driver(driver);
-    let keyword = effective_keyword(sql);
-    match keyword {
-        Some(k) if is_read_keyword(&k) => StatementClass::Read,
-        Some(k) if is_row_producing_mutation(&k, sql, backslash_escapes) => StatementClass::Read,
+    match effective_statement_keyword(sql, driver) {
+        Some(keyword) if is_read_keyword(&keyword, sql, driver) => StatementClass::Read,
+        Some(keyword) if is_row_producing_mutation(&keyword, sql, backslash_escapes) => StatementClass::Read,
         _ => StatementClass::Write,
     }
 }
@@ -21,95 +22,18 @@ fn is_row_producing_mutation(keyword: &str, sql: &str, backslash_escapes: bool) 
         && has_top_level_sql_keyword(sql, "RETURNING", backslash_escapes)
 }
 
-fn is_read_keyword(word: &str) -> bool {
-    matches!(word, "SELECT" | "SHOW" | "EXPLAIN" | "TABLE")
-}
+/// Keywords whose statement returns a result set on every supported driver.
+const UNIVERSAL_READ_KEYWORDS: [&str; 5] = ["SELECT", "SHOW", "EXPLAIN", "TABLE", "VALUES"];
 
-/// Extracts the effective first keyword of a SQL statement, handling
-/// leading comments and WITH...CTE chains. For `WITH cte AS (...) UPDATE ...`,
-/// returns "UPDATE" (not "WITH").
-fn effective_keyword(sql: &str) -> Option<String> {
-    let trimmed = strip_leading_comments(sql).trim_start();
-    let upper = trimmed.to_ascii_uppercase();
-    let first = upper.split_whitespace().next()?;
-    if first != "WITH" && !first.starts_with("WITH") {
-        return Some(first.to_string());
+/// `true` when a statement starting with `keyword` returns rows (#589).
+///
+/// `PRAGMA` returns rows for the introspection spellings SQLite users run
+/// (`PRAGMA table_info(t)`, `PRAGMA index_list(t)`), but `PRAGMA name = value`
+/// writes a setting, so only the reader spelling counts as a read. Other drivers
+/// never see `PRAGMA`.
+fn is_read_keyword(keyword: &str, sql: &str, driver: DriverType) -> bool {
+    if UNIVERSAL_READ_KEYWORDS.contains(&keyword) {
+        return true;
     }
-    if !is_with_keyword(trimmed) {
-        return Some(first.to_string());
-    }
-    Some(scan_with_statement(trimmed).unwrap_or_else(|| "WITH".to_string()))
-}
-
-fn is_with_keyword(sql: &str) -> bool {
-    !sql[4..]
-        .chars()
-        .next()
-        .is_some_and(|character| character.is_alphanumeric())
-}
-
-// cc-scan:allow COMPLEXITY,DEEP_NESTING — classifier/dispatch ladder — one case per branch
-fn scan_with_statement(sql: &str) -> Option<String> {
-    let chars: Vec<char> = sql.chars().collect();
-    let len = chars.len();
-    let mut i = 4; // skip "WITH"
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-
-    while i < len {
-        if in_string {
-            if chars[i] == '\'' {
-                if i + 1 < len && chars[i + 1] == '\'' {
-                    i += 1; // skip escaped quote
-                } else {
-                    in_string = false;
-                }
-            }
-            i += 1;
-            continue;
-        }
-
-        match chars[i] {
-            '\'' => in_string = true,
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    // Skip whitespace after closing paren
-                    i += 1;
-                    while i < len && chars[i].is_whitespace() {
-                        i += 1;
-                    }
-                    if i < len && chars[i] == ',' {
-                        // Another CTE follows — skip name + AS
-                        i += 1;
-                        continue;
-                    }
-                    // No comma: next word is the main statement keyword
-                    let remaining: String = chars[i..].iter().collect();
-                    return remaining.split_whitespace().next().map(|s| s.to_string());
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    None
-}
-
-fn strip_leading_comments(sql: &str) -> &str {
-    let mut s = sql.trim_start();
-    loop {
-        if s.starts_with("--") {
-            // Line comment: skip to end of line
-            s = s.find('\n').map(|i| &s[i + 1..]).unwrap_or("").trim_start();
-        } else if s.starts_with("/*") {
-            // Block comment: skip to */
-            s = s.find("*/").map(|i| &s[i + 2..]).unwrap_or("").trim_start();
-        } else {
-            break;
-        }
-    }
-    s
+    matches!(driver, DriverType::SQLite) && keyword == "PRAGMA" && !has_top_level_operator(sql, b'=', driver)
 }

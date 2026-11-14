@@ -117,8 +117,9 @@ fn malformed_row_surfaces_actionable_error() {
     let _ = fs::remove_file(&path);
 }
 
-// #429: a delimited writer must defuse spreadsheet formulas — database text starting with
-// `=`, `+`, `-`, `@`, tab, CR, newline or space gets the `'` literal prefix.
+// #429 (narrowed by #593): a delimited writer must defuse spreadsheet formulas — database text
+// starting with `=`, `@`, tab, CR, newline, or `+`/`-` followed by an expression gets the `'`
+// literal prefix. A leading space, phone numbers and bare `-` are data, not formulas.
 #[test]
 fn guard_csv_field_prefixes_formula_leading_values() {
     use std::borrow::Cow;
@@ -133,7 +134,6 @@ fn guard_csv_field_prefixes_formula_leading_values() {
         ("@SUM(A1)", "'@SUM(A1)"),
         ("\tcmd", "'\tcmd"),
         ("\rcmd", "'\rcmd"),
-        (" lead", "' lead"),
     ] {
         assert_eq!(
             guard_csv_field(input),
@@ -144,6 +144,44 @@ fn guard_csv_field_prefixes_formula_leading_values() {
     // Real numeric literals stay numeric; plain text is untouched.
     for input in ["-42", "+1.5", "-3.14e2", "plain", ""] {
         assert_eq!(guard_csv_field(input), Cow::<str>::Borrowed(input), "{input:?}");
+    }
+    // #593: values the guard used to corrupt now round-trip unchanged.
+    for input in [
+        "+84 912 345 678",
+        " leading space",
+        "-",
+        "-abc",
+        "@user",
+        "(555) 010-9999",
+    ] {
+        assert_eq!(guard_csv_field(input), Cow::<str>::Borrowed(input), "{input:?}");
+    }
+}
+
+/// #593: raw delimited output must never rewrite values, so a CSV/TSV round-trip
+/// (clipboard, DB→file, re-import) is lossless.
+#[test]
+fn raw_delimited_safety_leaves_values_untouched_593() {
+    use crate::application::DelimitedSafety;
+    use std::borrow::Cow;
+
+    for input in [
+        "=HYPERLINK(\"http://evil\",\"x\")",
+        "+84 912 345 678",
+        " x",
+        "-",
+        "@user",
+        "plain",
+    ] {
+        assert_eq!(
+            guard_csv_field_with(input, DelimitedSafety::Raw),
+            Cow::<str>::Borrowed(input),
+            "{input:?}"
+        );
+        // The Excel-safe mode still guards real formula payloads.
+        if input.starts_with('=') {
+            assert!(guard_csv_field_with(input, DelimitedSafety::ExcelSafe).starts_with('\''));
+        }
     }
 }
 

@@ -12,6 +12,8 @@ use super::{
 };
 use crate::components::Separator;
 use eframe::egui;
+// #583: row height for viewport culling of the object folders.
+use crate::app::EXPLORER_ROW_HEIGHT;
 use lucide_icons::Icon;
 
 pub(super) enum SchemaObjectFolderAction {
@@ -53,16 +55,53 @@ impl<'a> SchemaObjectFoldersView<'a> {
         schema_matches && (search_query.is_empty() || self.explorer.explorer_filter.name_matches(name, search_query))
     }
 
+    /// Draw one culled row list inside an open folder (#583).
+    ///
+    /// Views/Functions/Triggers used to paint *every* matching item each frame:
+    /// a PostGIS `public` schema carries 1.000+ functions, so the folder cost
+    /// O(n) layout + paint per frame. Like the Tables folder, rows outside the
+    /// clip rect collapse into a single spacer of the same height, so scroll
+    /// extent and hit-testing stay identical.
+    fn draw_culled_rows<'b, T: 'b>(
+        &self,
+        ui: &mut egui::Ui,
+        items: impl Iterator<Item = &'b T>,
+        mut draw_row: impl FnMut(&mut egui::Ui, &T) -> Vec<SchemaObjectFolderAction>,
+    ) -> Vec<SchemaObjectFolderAction> {
+        let clip = ui.clip_rect();
+        let mut actions = Vec::new();
+        for item in items {
+            let row_top = ui.cursor().min.y;
+            if crate::app::explorer_row_is_offscreen(row_top, EXPLORER_ROW_HEIGHT, clip) {
+                ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), EXPLORER_ROW_HEIGHT),
+                    egui::Sense::hover(),
+                );
+                continue;
+            }
+            actions.extend(draw_row(ui, item));
+        }
+        actions
+    }
+
     pub(super) fn draw_views(
         &self,
         ui: &mut egui::Ui,
         schema: &str,
         search_query: &str,
     ) -> Vec<SchemaObjectFolderAction> {
+        // #583: filter once per frame; the count is the filtered length.
         let in_scope = |view: &&UiViewSummary| self.object_in_scope(schema, &view.schema, &view.name, search_query);
-        let count = self.explorer.schema.views.iter().filter(in_scope).count();
+        let visible: Vec<&UiViewSummary> = self.explorer.schema.views.iter().filter(in_scope).collect();
+        let count = visible.len();
         let mut actions = Vec::new();
         let theme = self.theme;
+        let views_label = t!("explorer.views");
+        let empty_hint = if search_query.is_empty() {
+            t!("explorer.no_views")
+        } else {
+            t!("explorer.no_matching_views")
+        };
         let folder_id = ui.make_persistent_id(("codex_views_folder", schema));
         let folder_response = draw_category_folder(
             ui,
@@ -72,18 +111,15 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 id: folder_id,
                 icon: Icon::Eye,
                 icon_color: theme.success,
-                label: "Views",
+                label: &views_label,
                 count,
-                empty_label: Some(if search_query.is_empty() {
-                    "No views in schema"
-                } else {
-                    "No matching views"
-                }),
+                empty_label: Some(empty_hint.as_str()),
             },
             |ui| {
-                for view in self.explorer.schema.views.iter().filter(in_scope) {
-                    actions.extend(self.draw_view_row(ui, view));
-                }
+                let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, view| {
+                    self.draw_view_row(ui, view)
+                });
+                actions.extend(rows);
             },
         );
         self.draw_folder_menu(ui, &folder_response, schema, &mut actions);
@@ -99,9 +135,17 @@ impl<'a> SchemaObjectFoldersView<'a> {
         let in_scope = |function: &&UiFunctionSummary| {
             self.object_in_scope(schema, &function.schema, &function.name, search_query)
         };
-        let count = self.explorer.schema.functions.iter().filter(in_scope).count();
+        let visible: Vec<&UiFunctionSummary> =
+            self.explorer.schema.functions.iter().filter(in_scope).collect();
+        let count = visible.len();
         let mut actions = Vec::new();
         let theme = self.theme;
+        let functions_label = t!("explorer.functions");
+        let empty_hint = if search_query.is_empty() {
+            t!("explorer.no_functions")
+        } else {
+            t!("explorer.no_matching_functions")
+        };
         let folder_id = ui.make_persistent_id(("codex_functions_folder", schema));
         let folder_response = draw_category_folder(
             ui,
@@ -111,18 +155,15 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 id: folder_id,
                 icon: Icon::Code2,
                 icon_color: theme.code_type,
-                label: "Functions",
+                label: &functions_label,
                 count,
-                empty_label: Some(if search_query.is_empty() {
-                    "No functions in schema"
-                } else {
-                    "No matching functions"
-                }),
+                empty_label: Some(empty_hint.as_str()),
             },
             |ui| {
-                for function in self.explorer.schema.functions.iter().filter(in_scope) {
-                    actions.extend(self.draw_function_row(ui, function));
-                }
+                let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, function| {
+                    self.draw_function_row(ui, function)
+                });
+                actions.extend(rows);
             },
         );
         self.draw_folder_menu(ui, &folder_response, schema, &mut actions);
@@ -137,9 +178,17 @@ impl<'a> SchemaObjectFoldersView<'a> {
     ) -> Vec<SchemaObjectFolderAction> {
         let in_scope =
             |trigger: &&UiTriggerSummary| self.object_in_scope(schema, &trigger.schema, &trigger.name, search_query);
-        let count = self.explorer.schema.triggers.iter().filter(in_scope).count();
+        let visible: Vec<&UiTriggerSummary> =
+            self.explorer.schema.triggers.iter().filter(in_scope).collect();
+        let count = visible.len();
         let mut actions = Vec::new();
         let theme = self.theme;
+        let triggers_label = t!("explorer.triggers");
+        let empty_hint = if search_query.is_empty() {
+            t!("explorer.no_triggers")
+        } else {
+            t!("explorer.no_matching_triggers")
+        };
         let folder_id = ui.make_persistent_id(("codex_triggers_folder", schema));
         let folder_response = draw_category_folder(
             ui,
@@ -149,18 +198,15 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 id: folder_id,
                 icon: Icon::Zap,
                 icon_color: theme.warning,
-                label: "Triggers",
+                label: &triggers_label,
                 count,
-                empty_label: Some(if search_query.is_empty() {
-                    "No triggers in schema"
-                } else {
-                    "No matching triggers"
-                }),
+                empty_label: Some(empty_hint.as_str()),
             },
             |ui| {
-                for trigger in self.explorer.schema.triggers.iter().filter(in_scope) {
-                    actions.extend(self.draw_trigger_row(ui, trigger));
-                }
+                let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, trigger| {
+                    self.draw_trigger_row(ui, trigger)
+                });
+                actions.extend(rows);
             },
         );
         self.draw_folder_menu(ui, &folder_response, schema, &mut actions);
@@ -218,19 +264,22 @@ impl<'a> SchemaObjectFoldersView<'a> {
         let view_clone = view.clone();
         let schema = view.schema.clone();
         let name = view.name.clone();
+        let query_label = t!("explorer.select_top_100");
+        let modify_label = t!("explorer.modify_view");
+        let drop_label = t!("explorer.drop_view");
         let actions = SchemaObjectRowContext {
             theme: self.theme,
             label: &view.name,
             icon: Icon::Eye,
             icon_color: self.theme.success,
             is_selected,
-            query_label: Some("Select Top 100 (Query)"),
+            query_label: Some(query_label.as_str()),
             query_icon: Icon::Play,
-            open_label: "Open View",
+            open_label: &t!("explorer.open_view"),
             open_icon: Icon::Eye,
-            modify_label: Some("Modify View (Workbench)..."),
-            drop_label: Some("Drop View..."),
-            copy_label: "Copy View Name",
+            modify_label: Some(modify_label.as_str()),
+            drop_label: Some(drop_label.as_str()),
+            copy_label: &t!("explorer.copy_view_name"),
             trigger_toggle_label: None,
             trigger_toggle_unavailable_reason: None,
         }
@@ -279,6 +328,7 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 function.name, function.identity_arguments, function.routine_type
             )
         };
+        let call_label = t!("explorer.open_call_in_query");
         self.draw_row(
             ui,
             SchemaObjectRowContext {
@@ -287,13 +337,13 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 icon,
                 icon_color: self.theme.code_type,
                 is_selected,
-                query_label: Some("Open Call in Query"),
+                query_label: Some(call_label.as_str()),
                 query_icon: Icon::Play,
-                open_label: "Open Routine",
+                open_label: &t!("explorer.open_routine"),
                 open_icon: Icon::Code2,
                 modify_label: None,
                 drop_label: None,
-                copy_label: "Copy Routine Name",
+                copy_label: &t!("explorer.copy_routine_name"),
                 trigger_toggle_label: None,
                 trigger_toggle_unavailable_reason: None,
             },
@@ -322,10 +372,15 @@ impl<'a> SchemaObjectFoldersView<'a> {
             "{} · {} · {}",
             trigger.name,
             trigger.event,
-            if trigger.enabled { "Enabled" } else { "Disabled" }
+            if trigger.enabled {
+                t!("explorer.trigger_enabled")
+            } else {
+                t!("explorer.trigger_disabled")
+            }
         );
         let schema = trigger.schema.clone();
         let name = trigger.name.clone();
+        let drop_trigger_label = t!("explorer.drop_trigger");
         let actions = SchemaObjectRowContext {
             theme: self.theme,
             label: &label,
@@ -334,11 +389,11 @@ impl<'a> SchemaObjectFoldersView<'a> {
             is_selected,
             query_label: None,
             query_icon: Icon::Play,
-            open_label: "View Trigger",
+            open_label: &t!("explorer.view_trigger"),
             open_icon: Icon::Eye,
             modify_label: None,
-            drop_label: Some("Drop Trigger..."),
-            copy_label: "Copy Trigger Name",
+            drop_label: Some(drop_trigger_label.as_str()),
+            copy_label: &t!("explorer.copy_trigger_name"),
             trigger_toggle_label: trigger_toggle_menu_label(
                 trigger.enabled,
                 self.trigger_toggle_unavailable_reason.is_none(),
@@ -394,13 +449,14 @@ impl<'a> SchemaObjectFoldersView<'a> {
             .collect()
     }
 }
-fn trigger_toggle_menu_label(enabled: bool, supported: bool) -> Option<&'static str> {
+/// Label for the enable/disable item in a trigger's context menu (#568).
+fn trigger_toggle_menu_label(enabled: bool, supported: bool) -> Option<String> {
     if !supported {
         None
     } else if enabled {
-        Some("Disable Trigger")
+        Some(t!("explorer.disable_trigger").to_string())
     } else {
-        Some("Enable Trigger")
+        Some(t!("explorer.enable_trigger").to_string())
     }
 }
 

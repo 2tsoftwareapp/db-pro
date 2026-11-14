@@ -3,6 +3,10 @@ use super::super::pg_settings_state::PgSettingsState;
 use super::super::*;
 use crate::components::dialog::Dialog;
 
+/// Settings rows painted per frame (#569).
+const PG_SETTINGS_ROW_CAP: usize = 60;
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PgSettingsSurfaceAction {
     Refresh,
@@ -88,8 +92,12 @@ impl PgSettingsSurfaceContext<'_> {
                     || setting.category.to_ascii_lowercase().contains(&filter)
                     || setting.source.to_ascii_lowercase().contains(&filter)
             })
-            .take(60)
+            .take(PG_SETTINGS_ROW_CAP)
             .collect();
+        // #569: say how many settings are hidden by the cap.
+        if let Some(hint) = crate::components::common::shown_total_hint(settings.len(), snapshot.settings.len()) {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
         for setting in settings {
             self.draw_setting_card(ui, setting, actions);
         }

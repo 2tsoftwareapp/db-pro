@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS query_history (
     duration_ms INTEGER NOT NULL,
     row_count INTEGER NOT NULL,
     database TEXT,
-    schema TEXT
+    schema TEXT,
+    -- #600: failed statements are recorded too, with their redacted error text.
+    success INTEGER NOT NULL DEFAULT 1,
+    error_message TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_query_history_conn
