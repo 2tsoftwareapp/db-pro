@@ -410,4 +410,3 @@
         assert!(workspace.dependency_edge_cache.is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
-}

@@ -47,6 +47,7 @@ fn right_dock_calculates_horizontal_widths() {
     assert_eq!(layout.dock_position, OutputDockPosition::Right);
     assert_eq!(layout.dock_width, 500.0);
     assert_eq!(layout.editor_width, 700.0);
+}
 
 #[test]
 fn tall_window_grows_the_dock_beyond_the_old_flat_cap() {
