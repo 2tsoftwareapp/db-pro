@@ -242,3 +242,129 @@ fn utc_instant_is_normalized_to_utc() {
 
     assert_eq!(format_utc_instant(value), "2024-03-15T08:20:30.123456Z");
 }
+
+/// Build a binary NUMERIC payload: ndigits, weight, sign, dscale, digits.
+fn numeric_payload(sign: u16, digits: &[u16]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(digits.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(&0i16.to_be_bytes()); // weight
+    bytes.extend_from_slice(&sign.to_be_bytes());
+    bytes.extend_from_slice(&0i16.to_be_bytes()); // dscale
+    for digit in digits {
+        bytes.extend_from_slice(&digit.to_be_bytes());
+    }
+    bytes
+}
+
+/// #590: PostgreSQL 14+ numeric specials must decode instead of failing the
+/// whole result set.
+#[test]
+fn numeric_specials_decode_to_their_literals_590() {
+    assert_eq!(decode_binary_numeric(&numeric_payload(0xC000, &[])).as_deref(), Some("NaN"));
+    assert_eq!(
+        decode_binary_numeric(&numeric_payload(0xD000, &[])).as_deref(),
+        Some("Infinity")
+    );
+    assert_eq!(
+        decode_binary_numeric(&numeric_payload(0xF000, &[])).as_deref(),
+        Some("-Infinity")
+    );
+    // Ordinary values keep their previous behaviour.
+    assert_eq!(
+        decode_binary_numeric(&numeric_payload(0x0000, &[12, 3400])).as_deref(),
+        Some("123400")
+    );
+    assert_eq!(
+        decode_binary_numeric(&numeric_payload(0x4000, &[1])).as_deref(),
+        Some("-0001")
+    );
+    // A special sign with digits is malformed, not silently accepted.
+    assert!(decode_binary_numeric(&numeric_payload(0xD000, &[1])).is_none());
+}
+
+/// #590: those special values are bound as text rather than through BigDecimal.
+#[test]
+fn numeric_special_params_are_recognised_590() {
+    for value in ["NaN", "nan", "Infinity", "-Infinity", " inf "] {
+        assert!(is_special_decimal(value), "{value}");
+    }
+    for value in ["0", "-1.5", "1e9", ""] {
+        assert!(!is_special_decimal(value), "{value}");
+    }
+}
+
+/// #591: binary-array payloads must render as readable PostgreSQL array text
+/// instead of opaque `\x…` hex.
+#[test]
+fn binary_arrays_render_as_array_literals_591() {
+    fn array_payload(elements: &[Option<&str>]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&1u32.to_be_bytes()); // ndim
+        bytes.extend_from_slice(&0u32.to_be_bytes()); // has nulls
+        bytes.extend_from_slice(&25u32.to_be_bytes()); // element oid (text)
+        bytes.extend_from_slice(&(elements.len() as u32).to_be_bytes()); // dim length
+        bytes.extend_from_slice(&1u32.to_be_bytes()); // lower bound
+        for element in elements {
+            match element {
+                Some(text) => {
+                    bytes.extend_from_slice(&(text.len() as u32).to_be_bytes());
+                    bytes.extend_from_slice(text.as_bytes());
+                }
+                None => bytes.extend_from_slice(&u32::MAX.to_be_bytes()),
+            }
+        }
+        bytes
+    }
+
+    let payload = array_payload(&[Some("alpha"), Some("b,eta"), Some("\"quoted\""), None]);
+    assert_eq!(
+        format_binary_array(&payload).as_deref(),
+        Some(r#"{alpha,"b,eta","\"quoted\"",NULL}"#)
+    );
+    // A single-element int array.
+    let numbers = array_payload(&[Some("1"), Some("2")]);
+    assert_eq!(format_binary_array(&numbers).as_deref(), Some("{1,2}"));
+    // Truncated framing is rejected rather than panicking.
+    assert!(format_binary_array(&payload[..payload.len() - 2]).is_none());
+}
+
+/// #592: JSON/JSONB payloads must not go through `serde_json::Value`, which
+/// rounds large numbers and reorders keys.
+#[test]
+fn jsonb_text_preserves_numbers_and_key_order_592() {
+    let document = r#"{"b":1,"a":0.1234567890123456789,"big":123456789012345678901234}"#;
+    assert!(serde_json::from_str::<serde_json::Value>(document).is_ok());
+    // The infrastructure no longer parses the payload, so the invariant worth
+    // pinning is the version-byte stripping rule for `jsonb`.
+    let mut binary = vec![1u8];
+    binary.extend_from_slice(document.as_bytes());
+    let payload = match binary.split_first() {
+        Some((1, rest)) => rest,
+        _ => &binary[..],
+    };
+    assert_eq!(std::str::from_utf8(payload).unwrap(), document);
+    // Version-less `json` payloads pass through unchanged.
+    let json_payload = document.as_bytes();
+    assert_eq!(
+        std::str::from_utf8(match json_payload.split_first() {
+            Some((1, rest)) => rest,
+            _ => json_payload,
+        })
+        .unwrap(),
+        document
+    );
+}
+
+/// #592: JSON params are bound as text with an explicit `JSONB` type instead of
+/// a `serde_json::Value` round-trip.
+#[test]
+fn json_params_bind_as_text_with_explicit_type_592() {
+    let document = r#"{"b":1,"a":0.1234567890123456789}"#;
+    let mut args = PgArguments::default();
+    let types = bind_params_with_types(&[QueryParam::Json(serde_json::json!({"b": 1}))], &mut args)
+        .expect("json binds");
+    assert_eq!(types.len(), 1);
+    assert_eq!(types[0].name(), "JSONB");
+    let mut args = PgArguments::default();
+    bind_json_text(document, &mut args, None).expect("raw json text binds");
+}

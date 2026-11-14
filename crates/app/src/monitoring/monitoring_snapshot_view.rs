@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// Row caps for the snapshot sections (#569).
+const HEALTH_FINDING_CAP: usize = 25;
+const BLOCKING_LOCK_CAP: usize = 30;
+const RELATION_SIZE_CAP: usize = 20;
+
 pub(super) fn draw_health_and_local(
     ui: &mut egui::Ui,
     theme: DbProTheme,
@@ -50,7 +55,11 @@ fn draw_health_findings(
         );
         return;
     }
-    for finding in health.findings.iter().take(25) {
+    // #569: a capped list must say how many findings it hides.
+    if let Some(hint) = shown_total_hint(HEALTH_FINDING_CAP, health.findings.len()) {
+        ui.label(RichText::new(hint).small().color(theme.text_muted));
+    }
+    for finding in health.findings.iter().take(HEALTH_FINDING_CAP) {
         let color = match finding.severity {
             db_pro_core::domain::health_advisor::HealthSeverity::Critical => theme.danger,
             db_pro_core::domain::health_advisor::HealthSeverity::Warning => theme.warning,
@@ -102,12 +111,12 @@ fn draw_local_state(
     ui.add_space(SPACE_SM);
     ui.label(RichText::new(&local.note).small().color(theme.text_muted));
     ui.label(format!(
-        "journal={} · pages={:?} · page_size={:?} · freelist={:?} · ~bytes={:?}",
-        local.journal_mode.as_deref().unwrap_or("?"),
-        local.page_count,
-        local.page_size,
-        local.freelist_count,
-        local.file_size_bytes
+        "journal={} · pages={} · page_size={} · freelist={} · ~bytes={}",
+        fmt_opt(local.journal_mode.as_deref()),
+        fmt_opt(local.page_count),
+        fmt_opt(local.page_size),
+        fmt_opt(local.freelist_count),
+        fmt_opt(local.file_size_bytes.map(db_pro_core::domain::monitoring::format_bytes_exact))
     ));
 }
 
@@ -137,10 +146,10 @@ fn draw_server_summary(
     }
     ui.label(
         RichText::new(format!(
-            "db={} · connections={:?}/{:?} · size={}",
-            server.current_database.as_deref().unwrap_or("?"),
-            server.current_connections,
-            server.max_connections,
+            "db={} · connections={}/{} · size={}",
+            fmt_opt(server.current_database.as_deref()),
+            fmt_opt(server.current_connections),
+            fmt_opt(server.max_connections),
             server
                 .database_size_bytes
                 .map(db_pro_core::domain::monitoring::format_bytes_exact)
@@ -170,15 +179,19 @@ fn draw_blocking_locks(
     ui.add_space(SPACE_MD);
     section_label(ui, "LOCKS / BLOCKERS", theme);
     ui.add_space(SPACE_SM);
-    for lock in blocking.into_iter().take(30) {
+    // #569: blockers are the most dangerous thing to truncate silently.
+    if let Some(hint) = shown_total_hint(BLOCKING_LOCK_CAP, blocking.len()) {
+        ui.label(RichText::new(hint).small().color(theme.text_muted));
+    }
+    for lock in blocking.into_iter().take(BLOCKING_LOCK_CAP) {
         ui.label(
             RichText::new(format!(
-                "pid {} {} · blocker={:?} · {} · {}",
+                "pid {} {} · blocker={} · {} · {}",
                 lock.locked_pid,
                 if lock.granted { "granted" } else { "waiting" },
-                lock.blocker_pid,
-                lock.mode.as_deref().unwrap_or("?"),
-                lock.relation.as_deref().unwrap_or("?")
+                fmt_opt(lock.blocker_pid),
+                fmt_opt(lock.mode.as_deref()),
+                fmt_opt(lock.relation.as_deref())
             ))
             .small()
             .monospace()
@@ -198,17 +211,20 @@ fn draw_relation_sizes(
     ui.add_space(SPACE_MD);
     section_label(ui, "SIZE / STATS", theme);
     ui.add_space(SPACE_SM);
-    for relation in snapshot.relation_sizes.iter().take(20) {
+    if let Some(hint) = shown_total_hint(RELATION_SIZE_CAP, snapshot.relation_sizes.len()) {
+        ui.label(RichText::new(hint).small().color(theme.text_muted));
+    }
+    for relation in snapshot.relation_sizes.iter().take(RELATION_SIZE_CAP) {
         ui.label(
             RichText::new(format!(
-                "{}.{} ({}) · {} · seq={:?} idx={:?} dead={:?}",
+                "{}.{} ({}) · {} · seq={} idx={} dead={}",
                 relation.schema,
                 relation.name,
                 relation.kind,
                 db_pro_core::domain::monitoring::format_bytes_exact(relation.total_bytes),
-                relation.seq_scan,
-                relation.idx_scan,
-                relation.n_dead_tup
+                fmt_opt(relation.seq_scan),
+                fmt_opt(relation.idx_scan),
+                fmt_opt(relation.n_dead_tup)
             ))
             .small()
             .color(theme.text_secondary),

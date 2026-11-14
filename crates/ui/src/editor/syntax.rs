@@ -34,7 +34,9 @@ pub struct SyntaxToken {
 
 #[derive(Debug, Clone, Default)]
 pub struct CachedSqlTokens {
-    tokens: Vec<SyntaxToken>,
+    /// Shared, immutable token list. `Arc` so the render pass can hold a
+    /// reference for the whole frame without cloning the vector (#581).
+    tokens: std::sync::Arc<[SyntaxToken]>,
     version: u64,
     dialect: SqlDialect,
     initialized: bool,
@@ -55,12 +57,21 @@ impl CachedSqlTokens {
             return &self.tokens;
         }
         let highlighter = SqlHighlighter::new(dialect);
-        self.tokens = highlighter.tokenize(buffer.text());
+        self.tokens = highlighter.tokenize(buffer.text()).into();
         self.version = buffer.version();
         self.dialect = dialect;
         self.initialized = true;
         self.last_incremental_from = None;
         &self.tokens
+    }
+
+    /// Recompute (if needed) and hand back a shared handle to the token list.
+    ///
+    /// The renderer keeps this across its paint pass instead of copying the
+    /// tokens into a local `Vec` every frame (#581).
+    pub fn shared(&mut self, buffer: &TextBuffer, dialect: SqlDialect) -> std::sync::Arc<[SyntaxToken]> {
+        self.get_or_recompute(buffer, dialect);
+        std::sync::Arc::clone(&self.tokens)
     }
 
     /// Retokenize the edited line and the next one, then splice. Falls back when the
@@ -146,7 +157,7 @@ impl CachedSqlTokens {
             token.range.1 += region_start;
         }
 
-        let mut spliced = Vec::with_capacity(self.tokens.len());
+        let mut spliced: Vec<SyntaxToken> = Vec::with_capacity(self.tokens.len());
         for token in &self.tokens {
             if token.range.1 <= region_start {
                 spliced.push(token.clone());
@@ -170,7 +181,7 @@ impl CachedSqlTokens {
         if !tokens_cover(&spliced, text.len()) {
             return false;
         }
-        self.tokens = spliced;
+        self.tokens = spliced.into();
         self.version = buffer.version();
         self.dialect = dialect;
         self.initialized = true;

@@ -232,15 +232,22 @@ impl ApplyPlanBuilder {
                 UiTableMutation::Delete {
                     pk_columns: identity.original_pk_columns.clone(),
                     pk_values: identity.original_pk_values.clone(),
+                    pk_data_types: identity.original_pk_data_types.clone(),
                 },
                 MutationTarget::Delete {
                     identity: identity.clone(),
                     current_row_index: *current_row_index,
                 },
             )),
-            StagedChange::Insert { columns, values, .. } => self.inserts.push((
+            StagedChange::Insert {
+                columns,
+                values,
+                data_types,
+                ..
+            } => self.inserts.push((
                 UiTableMutation::Insert {
                     columns: columns.clone(),
+                    data_types: data_types.clone(),
                     values: values.clone(),
                 },
                 MutationTarget::Insert,
@@ -291,6 +298,7 @@ impl ApplyPlanBuilder {
                 values: update.values,
                 pk_columns: update.identity.original_pk_columns,
                 pk_values: update.identity.original_pk_values,
+                pk_data_types: update.identity.original_pk_data_types,
             };
             plan.push(change, target);
         }

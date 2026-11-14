@@ -436,15 +436,76 @@ impl SqliteHandle {
 // SqliteActor – owns the connection on a dedicated std::thread
 // ---------------------------------------------------------------------------
 
+/// Open `db_path` under `mode`.
+fn open_connection(db_path: &str, mode: SqliteOpenMode) -> Result<rusqlite::Connection, DbError> {
+    match mode {
+        SqliteOpenMode::Memory => rusqlite::Connection::open_in_memory().map_err(crate::error::from_rusqlite),
+        SqliteOpenMode::Existing => {
+            if !std::path::Path::new(db_path).exists() {
+                return Err(DbError::ConnectionFailed(format!(
+                    "SQLite database file does not exist: {db_path}"
+                )));
+            }
+            rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            )
+            .map_err(crate::error::from_rusqlite)
+        }
+        SqliteOpenMode::ReadOnly => {
+            if !std::path::Path::new(db_path).exists() {
+                return Err(DbError::ConnectionFailed(format!(
+                    "SQLite database file does not exist: {db_path}"
+                )));
+            }
+            rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            )
+            .map_err(crate::error::from_rusqlite)
+        }
+        SqliteOpenMode::CreateIfMissing => {
+            rusqlite::Connection::open(db_path).map_err(crate::error::from_rusqlite)
+        }
+    }
+}
+
 pub struct SqliteActor {
     conn: rusqlite::Connection,
+}
+
+/// How a database file may be opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqliteOpenMode {
+    /// Open an existing file and fail when it does not exist (`test_connection`
+    /// and every connection the user did not explicitly ask to create).
+    Existing,
+    /// Create the file when it is missing (the user chose "create new").
+    CreateIfMissing,
+    /// `:memory:` — never touches the filesystem.
+    Memory,
+    /// Open an existing file with `SQLITE_OPEN_READ_ONLY`: the engine itself
+    /// rejects every write, including ones the statement classifier cannot see.
+    ReadOnly,
 }
 
 impl SqliteActor {
     /// Open (or create) the database at `db_path`, spawn the actor thread,
     /// and return a clonable handle for sending commands.
+    ///
+    /// Kept for the internal meta store, which owns its file and must create it.
     pub fn spawn(db_path: &str) -> Result<SqliteHandle, DbError> {
-        let conn = rusqlite::Connection::open(db_path).map_err(crate::error::from_rusqlite)?;
+        Self::spawn_with_mode(db_path, SqliteOpenMode::CreateIfMissing)
+    }
+
+    /// Open a user database, refusing to invent a file for a mistyped path (#597).
+    ///
+    /// `rusqlite::Connection::open` sets `SQLITE_OPEN_CREATE`, so a one-character
+    /// typo in the path produced an empty database, reported "Test connection
+    /// succeeded", and showed an empty explorer — indistinguishable from a lost
+    /// database, with a stray `.db` left on disk.
+    pub fn spawn_with_mode(db_path: &str, mode: SqliteOpenMode) -> Result<SqliteHandle, DbError> {
+        let conn = open_connection(db_path, mode)?;
         // Two connections to the same database file would otherwise hit
         // SQLITE_BUSY immediately; wait up to 10s for a competing lock (#493).
         conn.busy_timeout(std::time::Duration::from_secs(10))
@@ -877,7 +938,7 @@ impl SqliteActor {
         // rollback then has nothing left to undo), so reject them outright
         // before opening it (#359).
         for stmt_sql in statements {
-            for statement in db_pro_core::domain::safety::split_statements(stmt_sql) {
+            for statement in expand_batch_units(stmt_sql) {
                 if let Some(verb) = db_pro_core::domain::safety::transaction_control_verb(&statement) {
                     return Err(DbError::Internal(format!(
                         "batch refused: {verb} cannot run inside an atomic batch"
@@ -888,16 +949,19 @@ impl SqliteActor {
         let tx = self.conn.unchecked_transaction().map_err(crate::error::from_rusqlite)?;
         let mut total: u64 = 0;
         for stmt_sql in statements {
-            if let Err(error) = tx.execute_batch(stmt_sql).map_err(crate::error::from_rusqlite) {
-                let rollback_error = tx.rollback().err().map(crate::error::from_rusqlite);
-                return match rollback_error {
-                    Some(rollback_error) => Err(DbError::Internal(format!(
-                        "batch statement failed: {error}; rollback failed: {rollback_error}"
-                    ))),
-                    None => Err(error),
-                };
-            }
-            total = match total.checked_add(tx.changes()) {
+            let affected = match execute_batch_units(&tx, stmt_sql) {
+                Ok(affected) => affected,
+                Err(error) => {
+                    let rollback_error = tx.rollback().err().map(crate::error::from_rusqlite);
+                    return match rollback_error {
+                        Some(rollback_error) => Err(DbError::Internal(format!(
+                            "batch statement failed: {error}; rollback failed: {rollback_error}"
+                        ))),
+                        None => Err(error),
+                    };
+                }
+            };
+            total = match total.checked_add(affected) {
                 Some(total) => total,
                 None => {
                     let error = DbError::Internal("batch affected-row count overflow".into());
@@ -914,6 +978,31 @@ impl SqliteActor {
         tx.commit().map_err(crate::error::from_rusqlite)?;
         Ok(total)
     }
+}
+
+/// One script string, expanded into what SQLite can execute in one call.
+///
+/// `rusqlite::execute_batch` prepares statements one at a time, so it stops at
+/// the first `;` of a `BEGIN … END` trigger body and reports the delimiter as
+/// the start of a new statement (#586). The block-aware splitter already knows
+/// where those delimiters are, so a trigger is handed over as its inner
+/// statements and then its `BEGIN … END` tail, which completes the body. A
+/// string without a body is returned unchanged.
+fn expand_batch_units(statement: &str) -> Vec<String> {
+    db_pro_core::domain::safety::split_statement_body_for_driver(
+        statement,
+        db_pro_core::domain::connection::DriverType::SQLite,
+    )
+}
+
+/// Run every unit of `statement` on `tx`, accumulating affected rows.
+fn execute_batch_units(tx: &rusqlite::Connection, statement: &str) -> Result<u64, DbError> {
+    let mut total: u64 = 0;
+    for unit in expand_batch_units(statement) {
+        tx.execute_batch(&unit).map_err(crate::error::from_rusqlite)?;
+        total = total.saturating_add(tx.changes());
+    }
+    Ok(total)
 }
 
 // ---------------------------------------------------------------------------

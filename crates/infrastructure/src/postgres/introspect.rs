@@ -92,6 +92,7 @@ async fn run_introspection_once(pool: &sqlx::PgPool) -> Result<IntrospectResult,
         views,
         triggers,
         functions,
+        table_definition_sql: Vec::new(),
     })
 }
 
@@ -188,76 +189,72 @@ async fn introspect_schemas(pool: &sqlx::PgPool) -> Result<Vec<Schema>, DbError>
         .collect())
 }
 
-// cc-scan:allow LONG_FUNCTION — linear pipeline — one cohesive pass
+/// Relations the explorer shows as tables: ordinary tables and partitioned
+/// parents (#595).
+///
+/// `information_schema.tables` reports every *partition* as its own
+/// `BASE TABLE`, so a table partitioned by month added one entry per month next
+/// to its parent — and the parent is `relkind = 'p'`, which the row-count query
+/// only joined for `relkind = 'r'`, so the parent was the one relation with no
+/// count at all. Reading `pg_class` keeps partitions out of the list (they stay
+/// reachable through their parent) and gives the parent the sum of its
+/// partitions' estimates.
+// cc-scan:allow LONG_FUNCTION — one catalog query plus its row mapping
 async fn introspect_tables(pool: &sqlx::PgPool) -> Result<Vec<Table>, DbError> {
-    // Fetch tables from information_schema
     let rows = sqlx::query(
         r#"
-        SELECT table_name, table_schema
-        FROM information_schema.tables
-        WHERE table_type = 'BASE TABLE'
-          AND table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND table_schema !~ '^pg_(toast_)?temp'
-        ORDER BY table_schema, table_name
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(crate::error::from_sqlx)?;
-
-    // Fetch approximate row counts from pg_class + pg_namespace
-    let count_rows = sqlx::query(
-        r#"
-        SELECT n.nspname AS schema_name, c.relname AS table_name, c.reltuples AS row_count
+        SELECT
+            c.relname AS table_name,
+            n.nspname AS schema_name,
+            c.relkind::text AS rel_kind,
+            c.reltuples AS row_count,
+            CASE
+                WHEN c.relkind = 'p' THEN (
+                    SELECT SUM(child.reltuples)::bigint
+                    FROM pg_inherits i
+                    JOIN pg_class child ON child.oid = i.inhrelid
+                    WHERE i.inhparent = c.oid AND child.reltuples >= 0
+                )
+                ELSE NULL
+            END AS partition_row_estimate
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind = 'r'
+        WHERE c.relkind IN ('r', 'p')
+          AND NOT c.relispartition
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND n.nspname !~ '^pg_(toast_)?temp'
+        ORDER BY n.nspname, c.relname
         "#,
     )
     .fetch_all(pool)
     .await
     .map_err(crate::error::from_sqlx)?;
 
-    let mut row_counts: std::collections::HashMap<(String, String), Option<u64>> = std::collections::HashMap::new();
-    for row in count_rows {
-        let schema: String = row.get("schema_name");
-        let table: String = row.get("table_name");
-        let raw: f32 = row.get("row_count");
-        let count = if raw < 0.0 { None } else { Some(raw as u64) };
-        row_counts.insert((schema, table), count);
-    }
-
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             let name: String = row.get("table_name");
-            let schema: String = row.get("table_schema");
-            let row_count = row_counts.get(&(schema.clone(), name.clone())).copied().flatten();
+            let schema: String = row.get("schema_name");
+            let rel_kind: String = row.get("rel_kind");
+            let row_count = if rel_kind == "p" {
+                // A partitioned parent stores no rows of its own, so `reltuples`
+                // is -1 there; the honest number is what its partitions hold.
+                row.try_get::<Option<i64>, _>("partition_row_estimate")
+                    .ok()
+                    .flatten()
+                    .and_then(|total| u64::try_from(total).ok())
+            } else {
+                let raw: f32 = row.get("row_count");
+                (raw >= 0.0).then(|| raw as u64)
+            };
             Table {
                 name,
                 schema,
                 row_count,
             }
         })
-        .collect())
+        .collect()
 }
 
-/// Raw column row including schema/table for PK matching.
-type RawColumn = (
-    String,
-    String,
-    String,
-    String,
-    usize,
-    bool,
-    Option<String>,
-    bool,
-    bool,
-    Option<String>,
-    Vec<String>,
-);
-
-// cc-scan:allow LONG_FUNCTION — linear pipeline — one cohesive pass
+// cc-scan:allow COMPLEXITY,LINE_TOO_LONG,LONG_FUNCTION — one catalog query plus its row mapping
 async fn introspect_columns_raw(pool: &sqlx::PgPool) -> Result<Vec<RawColumn>, DbError> {
     let rows = sqlx::query(
         r#"
@@ -320,53 +317,52 @@ async fn introspect_columns_raw(pool: &sqlx::PgPool) -> Result<Vec<RawColumn>, D
         .collect())
 }
 
+/// Primary keys, partition children included (#595).
+///
+/// The catalog query reads `pg_constraint`, so a partition inherits its parent's
+/// primary key; the result is folded to one entry per table so a partitioned
+/// parent lists its key columns once instead of once per partition.
 async fn introspect_primary_keys(pool: &sqlx::PgPool) -> Result<Vec<PrimaryKey>, DbError> {
     let rows = sqlx::query(
         r#"
-        SELECT tc.table_schema, tc.table_name, tc.constraint_name, kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-            AND tc.table_schema = kcu.table_schema
-        WHERE tc.constraint_type = 'PRIMARY KEY'
-          AND tc.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND tc.table_schema !~ '^pg_(toast_)?temp'
-        ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position
+        SELECT
+            n.nspname AS schema_name,
+            c.relname AS table_name,
+            a.attname AS column_name,
+            key.ordinality AS position
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum, ordinality)
+        JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum
+        WHERE con.contype = 'p'
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND n.nspname !~ '^pg_(toast_)?temp'
+        ORDER BY n.nspname, c.relname, key.ordinality
         "#,
     )
     .fetch_all(pool)
     .await
     .map_err(crate::error::from_sqlx)?;
 
-    // Group columns by (schema, table, constraint_name) to support composite keys
-    let mut map: std::collections::HashMap<(String, String, String), Vec<String>> = std::collections::HashMap::new();
-    let mut order: Vec<(String, String, String)> = Vec::new();
-
+    let mut primary_keys: Vec<PrimaryKey> = Vec::new();
     for row in rows {
-        let schema: String = row.get("table_schema");
-        let table: String = row.get("table_name");
-        let constraint_name: String = row.get("constraint_name");
+        let schema: String = row.get("schema_name");
+        let table_name: String = row.get("table_name");
         let column_name: String = row.get("column_name");
-        let key = (schema.clone(), table.clone(), constraint_name.clone());
-        if !map.contains_key(&key) {
-            order.push(key.clone());
-        }
-        map.entry(key).or_default().push(column_name);
-    }
-
-    Ok(order
-        .into_iter()
-        .map(|(schema, table, name)| {
-            let columns = map
-                .remove(&(schema.clone(), table.clone(), name.clone()))
-                .unwrap_or_default();
-            PrimaryKey {
-                constraint_name: name,
-                columns,
-                table_name: table,
+        match primary_keys
+            .iter_mut()
+            .find(|pk| pk.schema == schema && pk.table_name == table_name)
+        {
+            Some(pk) => pk.columns.push(column_name),
+            None => primary_keys.push(PrimaryKey {
+                constraint_name: format!("{table_name}_pkey"),
                 schema,
-            }
-        })
-        .collect())
+                table_name,
+                columns: vec![column_name],
+            }),
+        }
+    }
+    Ok(primary_keys)
 }
 
 // cc-scan:allow HUGE_FUNCTION — one catalog query plus its row mapping; the SQL literal dominates the length
@@ -771,12 +767,35 @@ fn optional_string(row: &PgRow, column: &str) -> Result<Option<String>, DbError>
     row.try_get(column).map_err(crate::error::from_sqlx)
 }
 
+/// Plain views, materialized views and foreign tables (#595).
+///
+/// `information_schema.views` covers exactly one of the three: a materialized
+/// view (`relkind = 'm'`) is not listed there at all, and a foreign table is
+/// `table_type = 'FOREIGN'`. The app creates materialized views in its own
+/// workbench (#184), so a materialized view the user had just created stayed
+/// invisible in the explorer even though its columns came back from
+/// `introspect_columns_raw` — an inconsistent tree. `pg_class` + `pg_get_viewdef`
+/// covers all three kinds with one definition source.
 async fn introspect_views(pool: &sqlx::PgPool) -> Result<Vec<View>, DbError> {
     let rows = sqlx::query(
         r#"
-        SELECT table_schema, table_name, view_definition
-        FROM information_schema.views
-        WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND table_schema !~ '^pg_(toast_)?temp'
+        SELECT
+            n.nspname AS table_schema,
+            c.relname AS table_name,
+            c.relkind::text AS rel_kind,
+            CASE
+                WHEN c.relkind = 'f' THEN COALESCE(
+                    (SELECT string_agg(option_name || '=' || option_value, ', ' ORDER BY option_name)
+                     FROM pg_options_to_table(c.reloptions)),
+                    ''
+                )
+                ELSE COALESCE(pg_get_viewdef(c.oid, true), '')
+            END AS definition
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind IN ('v', 'm', 'f')
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast') AND n.nspname !~ '^pg_(toast_)?temp'
+        ORDER BY n.nspname, c.relname
         "#,
     )
     .fetch_all(pool)
@@ -787,10 +806,14 @@ async fn introspect_views(pool: &sqlx::PgPool) -> Result<Vec<View>, DbError> {
         .map(|row| -> Result<View, DbError> {
             let schema = required_string(&row, "table_schema")?;
             let name = required_string(&row, "table_name")?;
-            // view_definition can be NULL for some edge-case views
-            // (e.g. information_schema views with insufficient privileges).
-            let definition = optional_string(&row, "view_definition")?.unwrap_or_default();
+            let rel_kind = optional_string(&row, "rel_kind")?.unwrap_or_default();
+            let definition = optional_string(&row, "definition")?.unwrap_or_default();
             Ok(View {
+                kind: match rel_kind.as_str() {
+                    "m" => RelationKind::MaterializedView,
+                    "f" => RelationKind::ForeignTable,
+                    _ => RelationKind::View,
+                },
                 name,
                 schema,
                 definition,
@@ -799,29 +822,37 @@ async fn introspect_views(pool: &sqlx::PgPool) -> Result<Vec<View>, DbError> {
         .collect()
 }
 
-// cc-scan:allow COMPLEXITY,LONG_FUNCTION — classifier/dispatch ladder — one case per branch
+/// User triggers, straight from `pg_trigger` (#594).
+///
+/// `information_schema.triggers` is not a usable source here: it emits one row
+/// *per event* (so `INSERT OR UPDATE` becomes two triggers with the same name),
+/// and nothing in it joins to `pg_trigger`. The previous
+/// `pg_t.tgname = t.trigger_name` join therefore multiplied every trigger by
+/// every table that used the same name (`set_updated_at` is the common case) and
+/// reported another table's `tgenabled`/function alongside it.
+///
+/// `pg_get_triggerdef` is authoritative, so `definition` is a complete
+/// `CREATE TRIGGER` statement for PostgreSQL too: `timing`, `event` and
+/// `enabled` are derived from `tgtype`/`tgenabled` for display only.
 async fn introspect_triggers(pool: &sqlx::PgPool) -> Result<Vec<Trigger>, DbError> {
     let rows = sqlx::query(
         r#"
         SELECT
-            t.trigger_name,
-            t.event_object_table,
-            t.event_object_schema,
-            t.action_timing,
-            t.event_manipulation,
-            t.action_statement,
-            COALESCE(pg_t.tgenabled, 'O')::text AS enabled_flag,
+            pg_t.tgname AS trigger_name,
+            c.relname AS table_name,
+            n.nspname AS table_schema,
+            pg_get_triggerdef(pg_t.oid, true) AS trigger_def,
+            pg_t.tgenabled::text AS enabled_flag,
+            pg_t.tgtype::int AS trigger_type,
             COALESCE(pg_get_functiondef(pg_proc.oid), '') AS function_def
-        FROM information_schema.triggers t
-        LEFT JOIN (
-            pg_trigger pg_t
-            JOIN pg_class c ON c.oid = pg_t.tgrelid
-            JOIN pg_namespace n ON n.oid = c.relnamespace
-        ) ON pg_t.tgname = t.trigger_name
+        FROM pg_trigger pg_t
+        JOIN pg_class c ON c.oid = pg_t.tgrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
         LEFT JOIN pg_proc ON pg_proc.oid = pg_t.tgfoid
-        WHERE pg_t.tgisinternal = false
-            AND t.trigger_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
-            AND t.trigger_schema !~ '^pg_(toast_)?temp'
+        WHERE NOT pg_t.tgisinternal
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            AND n.nspname !~ '^pg_(toast_)?temp'
+        ORDER BY n.nspname, c.relname, pg_t.tgname
         "#,
     )
     .fetch_all(pool)
@@ -831,26 +862,61 @@ async fn introspect_triggers(pool: &sqlx::PgPool) -> Result<Vec<Trigger>, DbErro
     rows.into_iter()
         .map(|row| -> Result<Trigger, DbError> {
             let name = required_string(&row, "trigger_name")?;
-            let table_name = optional_string(&row, "event_object_table")?.unwrap_or_default();
-            let schema = optional_string(&row, "event_object_schema")?.unwrap_or_default();
-            let timing = optional_string(&row, "action_timing")?.unwrap_or_default();
-            let event = optional_string(&row, "event_manipulation")?.unwrap_or_default();
-            let definition = optional_string(&row, "action_statement")?.unwrap_or_default();
+            let table_name = optional_string(&row, "table_name")?.unwrap_or_default();
+            let schema = optional_string(&row, "table_schema")?.unwrap_or_default();
+            let definition = optional_string(&row, "trigger_def")?.unwrap_or_default();
+            let trigger_type: i32 = row.try_get("trigger_type").unwrap_or(0);
             let enabled_flag = optional_string(&row, "enabled_flag")?.unwrap_or_else(|| "O".into());
-            let enabled = trigger_enabled_from_flag(&enabled_flag);
             let function_def = optional_string(&row, "function_def")?.unwrap_or_default();
             Ok(Trigger {
                 name,
                 table_name,
                 schema,
-                timing,
-                event,
+                timing: trigger_timing_from_tgtype(trigger_type),
+                event: trigger_events_from_tgtype(trigger_type),
                 definition,
                 function_def,
-                enabled,
+                enabled: trigger_enabled_from_flag(&enabled_flag),
             })
         })
         .collect()
+}
+
+/// `AFTER` is the absence of `BEFORE` and `INSTEAD OF` in `tgtype`.
+fn trigger_timing_from_tgtype(trigger_type: i32) -> String {
+    const TRIGGER_TYPE_BEFORE: i32 = 1 << 1;
+    const TRIGGER_TYPE_INSTEAD: i32 = 1 << 6;
+    if trigger_type & TRIGGER_TYPE_BEFORE != 0 {
+        "BEFORE".into()
+    } else if trigger_type & TRIGGER_TYPE_INSTEAD != 0 {
+        "INSTEAD OF".into()
+    } else {
+        "AFTER".into()
+    }
+}
+
+/// The statement events a `tgtype` mask carries, in `pg_trigger` bit order.
+/// The row/stmt bit is not an event; `FOR EACH ROW` lives in the authoritative
+/// `pg_get_triggerdef` text.
+fn trigger_events_from_tgtype(trigger_type: i32) -> String {
+    const TRIGGER_TYPE_INSERT: i32 = 1 << 2;
+    const TRIGGER_TYPE_DELETE: i32 = 1 << 3;
+    const TRIGGER_TYPE_UPDATE: i32 = 1 << 4;
+    const TRIGGER_TYPE_TRUNCATE: i32 = 1 << 5;
+    let mut events = Vec::new();
+    if trigger_type & TRIGGER_TYPE_INSERT != 0 {
+        events.push("INSERT");
+    }
+    if trigger_type & TRIGGER_TYPE_DELETE != 0 {
+        events.push("DELETE");
+    }
+    if trigger_type & TRIGGER_TYPE_UPDATE != 0 {
+        events.push("UPDATE");
+    }
+    if trigger_type & TRIGGER_TYPE_TRUNCATE != 0 {
+        events.push("TRUNCATE");
+    }
+    events.join(" OR ")
 }
 
 fn trigger_enabled_from_flag(flag: &str) -> bool {

@@ -125,6 +125,7 @@ pub(crate) fn draft_to_domain(
                 _ => db_pro_core::domain::connection::ConnectionEnvironment::Development,
             },
             readonly: draft.readonly,
+            create_if_missing: draft.create_if_missing,
         },
         if driver == db_pro_core::domain::connection::DriverType::SQLite {
             String::new()
@@ -402,6 +403,24 @@ pub(crate) fn translate_table_command(command: UiCommand) -> Option<RuntimeComma
     }
 }
 
+/// Map cells using their column types when the protocol carried them (#587).
+///
+/// Older/partial callers send an empty or short `data_types` slice; those cells
+/// keep the historical content-based inference rather than failing the mutation.
+fn map_typed_cells(
+    values: Vec<UiCell>,
+    data_types: &[String],
+) -> Option<Vec<db_pro_core::domain::value::CellValue>> {
+    if data_types.len() != values.len() {
+        return values.into_iter().map(ui_cell_to_domain).collect();
+    }
+    values
+        .into_iter()
+        .zip(data_types.iter())
+        .map(|(value, data_type)| ui_cell_to_domain_typed(value, data_type))
+        .collect()
+}
+
 pub(crate) fn map_table_mutation(mutation: UiTableMutation) -> Option<db_pro_core::application::TableDataMutation> {
     match mutation {
         UiTableMutation::Update {
@@ -410,6 +429,7 @@ pub(crate) fn map_table_mutation(mutation: UiTableMutation) -> Option<db_pro_cor
             values,
             pk_columns,
             pk_values,
+            pk_data_types,
         } => {
             if columns.len() != data_types.len() || columns.len() != values.len() {
                 return None;
@@ -422,24 +442,28 @@ pub(crate) fn map_table_mutation(mutation: UiTableMutation) -> Option<db_pro_cor
                     .map(|(value, data_type)| ui_cell_to_domain_typed(value, &data_type))
                     .collect::<Option<Vec<_>>>()?,
                 pk_columns,
-                pk_values: pk_values
-                    .into_iter()
-                    .map(ui_cell_to_domain)
-                    .collect::<Option<Vec<_>>>()?,
+                pk_values: map_typed_cells(pk_values, &pk_data_types)?,
             })
         }
-        UiTableMutation::Delete { pk_columns, pk_values } => {
+        UiTableMutation::Delete {
+            pk_columns,
+            pk_values,
+            pk_data_types,
+        } => {
             Some(db_pro_core::application::TableDataMutation::Delete {
                 pk_columns,
-                pk_values: pk_values
-                    .into_iter()
-                    .map(ui_cell_to_domain)
-                    .collect::<Option<Vec<_>>>()?,
+                // #587: PK values carry their column types, so a text PK holding
+                // a UUID stays text instead of being sniffed into another type.
+                pk_values: map_typed_cells(pk_values, &pk_data_types)?,
             })
         }
-        UiTableMutation::Insert { columns, values } => Some(db_pro_core::application::TableDataMutation::Insert {
+        UiTableMutation::Insert {
             columns,
-            values: values.into_iter().map(ui_cell_to_domain).collect::<Option<Vec<_>>>()?,
+            data_types,
+            values,
+        } => Some(db_pro_core::application::TableDataMutation::Insert {
+            columns,
+            values: map_typed_cells(values, &data_types)?,
         }),
     }
 }

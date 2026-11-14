@@ -48,6 +48,7 @@ fn primary_key_identity(value: &str) -> RowIdentity {
     RowIdentity {
         original_pk_columns: vec!["id".to_owned()],
         original_pk_values: vec![UiCell::Number(value.to_owned())],
+        original_pk_data_types: Vec::new(),
     }
 }
 
@@ -321,6 +322,7 @@ fn connection_summary_with_ssl_mode(ssl_mode: UiSslMode) -> UiConnectionSummary 
         driver: "PostgreSQL".to_owned(),
         ssl_mode,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -461,6 +463,7 @@ fn editing_a_mysql_connection_keeps_the_mysql_driver() {
         driver: "MySQL".to_owned(),
         ssl_mode: UiSslMode::Require,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -513,6 +516,7 @@ fn table_edits_stage_until_explicit_apply() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -619,6 +623,7 @@ fn editing_primary_key_stages_new_value_with_original_identity() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -698,6 +703,7 @@ fn no_primary_key_table_blocks_safe_row_mutations() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -764,6 +770,7 @@ fn binary_cell_edit_is_refused_with_a_reason() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -866,6 +873,7 @@ fn generated_column_edit_is_refused_before_staging() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -979,6 +987,7 @@ fn generated_column_is_never_staged_by_insert() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -1082,6 +1091,7 @@ fn generated_column_is_never_staged_by_insert() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -1144,6 +1154,7 @@ fn duplicated_row_leaves_blocked_columns_empty() {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -1360,6 +1371,7 @@ fn explain_query_uses_selected_connection_and_switches_output() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -1407,6 +1419,7 @@ fn explain_analyze_requires_explicit_confirm_before_dispatch() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -1512,6 +1525,7 @@ fn selected_connection_is_not_shown_as_connected() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -1675,6 +1689,7 @@ fn provider_capabilities_gate_provider_specific_actions() {
         driver: "SQLite".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -1756,6 +1771,7 @@ fn mysql_connection_resolves_to_its_own_capability_set() {
                     driver: "MySQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -1810,6 +1826,7 @@ fn unknown_driver_resolves_to_a_named_state_not_none() {
                     driver: "Oracle".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -1891,6 +1908,7 @@ fn query_capabilities_follow_the_bound_connection_and_do_not_default_to_postgres
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -1906,6 +1924,7 @@ fn query_capabilities_follow_the_bound_connection_and_do_not_default_to_postgres
         driver: "SQLite".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -2734,11 +2753,17 @@ fn explorer_search_matches_table_names_case_insensitively() {
     assert_eq!(fuzzy_count, 1);
     assert_eq!(fuzzy_visible, vec!["customer_id".to_owned()]);
 
-    let tables = (0..=EXPLORER_MAX_TABLES)
-        .map(|index| format!("orders_{index}"))
-        .collect::<Vec<_>>();
+    // #572: a schema with many tables must be fully browsable, not truncated at
+    // 100 with a "refine filter" hint.
+    let tables = (0..350).map(|index| format!("orders_{index}")).collect::<Vec<_>>();
     let (matching_count, visible_tables) =
         filtered_explorer_tables(&tables, "orders", ExplorerMatchMode::Contains);
+    assert_eq!(matching_count, 350);
+    assert_eq!(visible_tables.len(), 350, "every table stays reachable");
+
+    // The cap survives only as a guard against pathological schemas.
+    let many = (0..=EXPLORER_MAX_TABLES).map(|index| format!("t_{index}")).collect::<Vec<_>>();
+    let (matching_count, visible_tables) = filtered_explorer_tables(&many, "t_", ExplorerMatchMode::Contains);
     assert_eq!(matching_count, EXPLORER_MAX_TABLES + 1);
     assert_eq!(visible_tables.len(), EXPLORER_MAX_TABLES);
 }
@@ -2938,6 +2963,7 @@ fn command_palette_connection_switch_preserves_session_when_dispatch_fails() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -2953,6 +2979,7 @@ fn command_palette_connection_switch_preserves_session_when_dispatch_fails() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -2984,6 +3011,7 @@ fn command_palette_refresh_schema_bypasses_the_metadata_cache() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -3060,6 +3088,7 @@ fn loading_connections_automatically_connects_active_connection() {
                 driver: "PostgreSQL".to_owned(),
                 ssl_mode: UiSslMode::Disable,
                 readonly: false,
+                create_if_missing: false,
                 tags: vec![],
                 group: None,
                 favorite: false,
@@ -3094,6 +3123,7 @@ fn failed_connection_shows_red_indicator_and_records_error() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -3730,6 +3760,7 @@ fn deleting_sibling_connection_does_not_auto_reconnect_active() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -3745,6 +3776,7 @@ fn deleting_sibling_connection_does_not_auto_reconnect_active() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -3990,6 +4022,7 @@ fn diagnostics_summary_redacts_runtime_errors_and_lists_mysql() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: crate::UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -4239,6 +4272,7 @@ fn schema_refresh_reloads_the_selected_table_after_summary_completion() {
         driver: "SQLite".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -4368,7 +4402,7 @@ fn closing_workspace_tab_clears_its_resource_and_requests() {
     assert_eq!(app.table.state.table_info_request, None);
     assert_eq!(app.table.state.table_ddl_request, None);
     assert_eq!(app.table.data_query.request, None);
-    assert_eq!(app.table.data_query.result, None);
+    assert!(app.table.data_query.result.is_none());
     assert!(app.table.data_query.filters.is_empty());
     assert!(app.table.data_query.sorts.is_empty());
     assert!(app.table.mutation.staged_changes.is_empty());
@@ -4390,6 +4424,7 @@ fn query_dispatch_uses_the_active_connection_not_the_first_connection() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -4405,6 +4440,7 @@ fn query_dispatch_uses_the_active_connection_not_the_first_connection() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -4440,6 +4476,7 @@ fn dispatch_caps_reads_with_the_toolbar_row_limit() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -4510,6 +4547,7 @@ fn ddl_apply_dispatch_requires_an_explicit_request_and_uses_active_connection() 
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -4820,6 +4858,7 @@ fn test_query_cancellation_capability_gate() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -4835,6 +4874,7 @@ fn test_query_cancellation_capability_gate() {
         driver: "SQLite".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -5446,6 +5486,7 @@ fn query_dispatch_allows_independent_documents_to_run_concurrently() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -5461,6 +5502,7 @@ fn query_dispatch_allows_independent_documents_to_run_concurrently() {
             driver: "SQLite".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -5617,6 +5659,7 @@ fn test_multi_tab_explain_plan_routing() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -5694,6 +5737,7 @@ fn test_per_document_connection_and_schema_isolation() {
                         username: "postgres".to_owned(),
                         ssl_mode: UiSslMode::Disable,
                         readonly: false,
+                        create_if_missing: false,
                         tags: vec![],
                         group: None,
                         favorite: false,
@@ -5709,6 +5753,7 @@ fn test_per_document_connection_and_schema_isolation() {
                         username: "".to_owned(),
                         ssl_mode: UiSslMode::Disable,
                         readonly: false,
+                        create_if_missing: false,
                         tags: vec![],
                         group: None,
                         favorite: false,
@@ -5769,6 +5814,7 @@ fn document_schema_resets_to_bound_driver_default_on_connection_switch() {
                         username: "u".to_owned(),
                         ssl_mode: UiSslMode::Disable,
                         readonly: false,
+                        create_if_missing: false,
                         tags: vec![],
                         group: None,
                         favorite: false,
@@ -5784,6 +5830,7 @@ fn document_schema_resets_to_bound_driver_default_on_connection_switch() {
                         username: "".to_owned(),
                         ssl_mode: UiSslMode::Disable,
                         readonly: false,
+                        create_if_missing: false,
                         tags: vec![],
                         group: None,
                         favorite: false,
@@ -6360,7 +6407,7 @@ fn test_composite_pk_targeted_reload_and_merge() {
         check_constraints: Vec::new(),
         dependencies: Vec::new(),
     });
-    app.table.data_query.result = Some(UiQueryResult {
+    app.table.data_query.set_result(UiQueryResult {
         columns: vec![
             crate::UiColumn {
                 name: "tenant_id".to_owned(),
@@ -6397,6 +6444,7 @@ fn test_composite_pk_targeted_reload_and_merge() {
     let target_identity = RowIdentity {
         original_pk_columns: vec!["tenant_id".to_owned(), "user_id".to_owned()],
         original_pk_values: vec![UiCell::Number("1".to_owned()), UiCell::Number("20".to_owned())],
+        original_pk_data_types: Vec::new(),
     };
 
     app.request_table_row_reload(target_identity);
@@ -6417,7 +6465,7 @@ fn test_composite_pk_targeted_reload_and_merge() {
     assert_eq!(filters[1].value, "20");
 
     let server_reloaded = UiQueryResult {
-        columns: app.table.data_query.result.as_ref().unwrap().columns.clone(),
+        columns: app.table.data_query.result_ref().unwrap().columns.clone(),
         rows: vec![vec![
             UiCell::Number("1".to_owned()),
             UiCell::Number("20".to_owned()),
@@ -6429,7 +6477,7 @@ fn test_composite_pk_targeted_reload_and_merge() {
 
     app.on_table_row_reloaded(server_reloaded);
 
-    let result = app.table.data_query.result.as_ref().unwrap();
+    let result = app.table.data_query.result_ref().unwrap();
     assert_eq!(result.rows[0][2], UiCell::Text("admin".to_owned()));
     assert_eq!(result.rows[1][2], UiCell::Text("manager".to_owned()));
 }
@@ -6503,14 +6551,17 @@ fn test_apply_mutation_failure_preserves_changeset_and_focuses_failed_cell() {
     let id_1 = RowIdentity {
         original_pk_columns: vec!["id".to_owned()],
         original_pk_values: vec![UiCell::Number("1".to_owned())],
+        original_pk_data_types: Vec::new(),
     };
     let id_2 = RowIdentity {
         original_pk_columns: vec!["id".to_owned()],
         original_pk_values: vec![UiCell::Number("2".to_owned())],
+        original_pk_data_types: Vec::new(),
     };
     let id_3 = RowIdentity {
         original_pk_columns: vec!["id".to_owned()],
         original_pk_values: vec![UiCell::Number("3".to_owned())],
+        original_pk_data_types: Vec::new(),
     };
 
     app.table.mutation.staged_changes.stage_update(StagedChange::Update {
@@ -6590,9 +6641,10 @@ fn test_conflict_keep_mine_and_use_database_resolution_actions() {
     let id = RowIdentity {
         original_pk_columns: vec!["id".to_owned()],
         original_pk_values: vec![UiCell::Number("42".to_owned())],
+        original_pk_data_types: Vec::new(),
     };
 
-    app.table.data_query.result = Some(UiQueryResult {
+    app.table.data_query.set_result(UiQueryResult {
         columns: vec![
             crate::UiColumn {
                 name: "id".to_owned(),
@@ -6684,6 +6736,7 @@ fn destructive_statement_is_held_until_it_is_confirmed() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -6731,6 +6784,7 @@ fn cancelling_a_held_destructive_statement_sends_nothing() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -6776,6 +6830,7 @@ fn reads_writes_and_plain_ddl_dispatch_without_a_prompt() {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,
@@ -6819,6 +6874,7 @@ fn a_script_whose_worst_statement_is_destructive_is_held() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -6869,6 +6925,7 @@ fn connect_postgres(app: &mut DbProApp) {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -7005,6 +7062,7 @@ fn dispatch_query_binds_named_parameters_for_postgres() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -7153,6 +7211,7 @@ fn saved_task_persists_without_secrets_and_blocks_destructive_without_confirm() 
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -7189,6 +7248,7 @@ fn scheduled_task_tick_dispatches_once_while_app_active() {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: vec![],
         group: None,
         favorite: false,
@@ -7290,6 +7350,7 @@ fn badged_connection(index: usize) -> UiConnectionSummary {
         driver: "sqlite".to_owned(),
         ssl_mode: UiSslMode::Disable,
         readonly: false,
+        create_if_missing: false,
         tags: Vec::new(),
         group: None,
         favorite: false,
@@ -7678,6 +7739,7 @@ fn staged_apply_with_deletes_requires_confirmation() {
         identity: RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         },
         current_row_index: Some(0),
     });

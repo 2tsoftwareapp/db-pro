@@ -10,6 +10,12 @@ pub struct SQLiteMetaStore {
 }
 
 impl SQLiteMetaStore {
+    /// Wrap an already-migrated handle (tests, and callers that own the actor).
+    #[cfg(test)]
+    pub(crate) fn from_handle(actor: SqliteHandle) -> Self {
+        Self { actor }
+    }
+
     pub async fn new(db_path: &str) -> Result<Self, DbError> {
         let actor = SqliteActor::spawn(db_path)?;
         // Create baseline schema (all tables use IF NOT EXISTS).

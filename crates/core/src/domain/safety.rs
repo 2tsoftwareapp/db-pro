@@ -5,6 +5,7 @@ use safety_lexer::{
     skip_block_comment, skip_dollar_quote, skip_line_comment, skip_quoted, special_token_end, token_is_word,
     tokenize_sql, SqlTokenKind,
 };
+use safety_split::{BlockSplitter, StatementBodyTerminator};
 pub use safety_policy::{validate_against_policy, ConnectionSafetyPolicy};
 
 #[path = "safety/safety_cte.rs"]
@@ -14,6 +15,9 @@ mod safety_lexer;
 
 #[path = "safety/safety_policy.rs"]
 mod safety_policy;
+
+#[path = "safety/safety_split.rs"]
+mod safety_split;
 
 /// Classification of a SQL statement for safety enforcement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +61,65 @@ pub fn classify_statement_safety_for_driver(sql: &str, driver: DriverType) -> Op
     classify_statement_safety_lexed(sql, backslash_escapes_for_driver(driver))
 }
 
+/// The verb that decides a statement's *result shape*: the leading keyword, with
+/// `WITH` resolved past its CTE list (#589).
+///
+/// `WITH RECURSIVE t(n) AS (…) SELECT …` returns rows; `WITH d AS (DELETE …)
+/// DELETE …` does not. Run-all routes on this verb to pick `query` (grid) over
+/// `execute` (row count), so resolving the CTE list is what keeps Run and Run-all
+/// returning the same thing for the same statement. The CTE bodies themselves
+/// are ignored: data-modifying CTEs stay a safety question, answered by
+/// `classify_statement_safety_for_driver`.
+pub fn effective_statement_keyword(sql: &str, driver: DriverType) -> Option<String> {
+    let backslash_escapes = backslash_escapes_for_driver(driver);
+    let trimmed = strip_leading_comments(sql.trim_start()).trim_start();
+    let first = first_sql_word(trimmed)?;
+    if !first.eq_ignore_ascii_case("WITH") {
+        return Some(first.to_owned());
+    }
+    scan_with_statement(trimmed, backslash_escapes).or_else(|| Some(first.to_owned()))
+}
+
+fn first_sql_word(sql: &str) -> Option<&str> {
+    sql.split(|character: char| !(character.is_alphanumeric() || character == '_'))
+        .find(|word| !word.is_empty())
+}
+
+/// The first top-level word after the CTE list of a `WITH …` statement.
+///
+/// Walked structurally rather than by parenthesis counting: `WITH t(n) AS (…)`
+/// closes its *column list* first, and returning `AS` as the verb is exactly the
+/// defect this replaces. `AS`/`NOT`/`MATERIALIZED` are CTE syntax, never verbs.
+fn scan_with_statement(sql: &str, backslash_escapes: bool) -> Option<String> {
+    let tokens = tokenize_sql(sql, backslash_escapes);
+    let mut index = tokens.iter().position(|token| token_is_word(sql, *token, "WITH"))? + 1;
+    if tokens
+        .get(index)
+        .is_some_and(|token| token_is_word(sql, *token, "RECURSIVE"))
+    {
+        index += 1;
+    }
+
+    let mut depth = 0usize;
+    for token in tokens.iter().skip(index) {
+        if depth == 0 && token.kind == SqlTokenKind::Word {
+            let word = &sql[token.start..token.end];
+            if !word.eq_ignore_ascii_case("AS")
+                && !word.eq_ignore_ascii_case("NOT")
+                && !word.eq_ignore_ascii_case("MATERIALIZED")
+            {
+                return Some(word.to_owned());
+            }
+        }
+        match token.kind {
+            SqlTokenKind::OpenParen => depth += 1,
+            SqlTokenKind::CloseParen => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// `true` only for drivers whose `'…'` strings treat `\` as an escape by
 /// default. The lexers enable the same behaviour for `E'…'` literals on their
 /// own, without this flag.
@@ -82,6 +145,11 @@ fn classify_statement_safety_lexed(sql: &str, backslash_escapes: bool) -> Option
             // a top-level INTO is DDL-shaped, not a plain read.
             if has_top_level_sql_keyword(trimmed, "INTO", backslash_escapes) {
                 Some(StatementSafety::Ddl)
+            } else if has_row_lock_clause(trimmed, backslash_escapes) {
+                // `FOR UPDATE` / `FOR NO KEY UPDATE` / `FOR SHARE` / `FOR KEY SHARE`
+                // take row locks and hold them for the transaction: a production
+                // read-only connection must not be able to block writers (#588).
+                Some(StatementSafety::Write)
             } else {
                 Some(StatementSafety::Read)
             }
@@ -117,6 +185,23 @@ fn classify_statement_safety_lexed(sql: &str, backslash_escapes: bool) -> Option
         "MERGE" => classify_merge_safety(trimmed, backslash_escapes),
         _ => Some(StatementSafety::Write),
     }
+}
+
+/// Whether a `SELECT` carries a row-lock clause (`FOR UPDATE`, `FOR SHARE`,
+/// `FOR NO KEY UPDATE`, `FOR KEY SHARE`, optionally behind `OF …`/`NOWAIT`).
+///
+/// `FOR UPDATE` inside a subquery locks that subquery's rows just the same, so
+/// the whole statement is scanned rather than only its top level.
+fn has_row_lock_clause(sql: &str, backslash_escapes: bool) -> bool {
+    let tokens = tokenize_sql(sql, backslash_escapes);
+    tokens.iter().enumerate().any(|(index, token)| {
+        token_is_word(sql, *token, "FOR")
+            && tokens.get(index + 1).is_some_and(|next| {
+                ["UPDATE", "SHARE", "NO", "KEY"]
+                    .iter()
+                    .any(|keyword| token_is_word(sql, *next, keyword))
+            })
+    })
 }
 
 /// Classify a SQL script that may hold several statements by its **most
@@ -189,9 +274,25 @@ pub fn split_statements(sql: &str) -> Vec<String> {
 /// quote instead. The default `split_statements` keeps the PostgreSQL reading,
 /// which is the safe interpretation for every other driver (#477).
 pub fn split_statements_for_driver(sql: &str, driver: DriverType) -> Vec<String> {
+    split_with_body_terminators(sql, driver).0
+}
+
+/// Split a script into units the driver can execute one at a time, and report
+/// where statement separators fell *inside* a `BEGIN … END` body (#586).
+///
+/// The body delimiters are needed by engines that re-split what they receive
+/// (SQLite runs a batch one statement at a time); the splitter already knows
+/// which `;` values those are, and a second, simpler splitter is exactly how the
+/// two paths drifted apart before.
+fn split_with_body_terminators(
+    sql: &str,
+    driver: DriverType,
+) -> (Vec<String>, Vec<StatementBodyTerminator>) {
     let backslash_escapes = backslash_escapes_for_driver(driver);
     let mut statements = Vec::new();
     let mut current = String::new();
+    let mut splitter = BlockSplitter::new(driver);
+    let mut body_terminators = Vec::new();
     let bytes = sql.as_bytes();
     let mut index = 0;
 
@@ -199,7 +300,8 @@ pub fn split_statements_for_driver(sql: &str, driver: DriverType) -> Vec<String>
         if let Some(end) = special_token_end(bytes, index, backslash_escapes) {
             current.push_str(&sql[index..end]);
             index = end;
-        } else if bytes[index] == b';' {
+        } else if bytes[index] == b';' && splitter.terminates_statement(sql, index, backslash_escapes) {
+            body_terminators.append(&mut splitter.take_body_terminators());
             push_statement(&mut statements, &current);
             current.clear();
             index += 1;
@@ -212,9 +314,38 @@ pub fn split_statements_for_driver(sql: &str, driver: DriverType) -> Vec<String>
         }
     }
 
+    body_terminators.append(&mut splitter.take_body_terminators());
     push_statement(&mut statements, &current);
-    statements
+    (statements, body_terminators)
 }
+
+/// Split one statement at the `;` separators that belong to its `BEGIN … END`
+/// body, so an engine with no block-aware parser can run each inner statement
+/// (SQLite `execute_batch`).
+///
+/// A statement without a body comes back as the single original string, byte for
+/// byte: this must never reformat or rejoin SQL that the caller wrote.
+pub fn split_statement_body_for_driver(statement: &str, driver: DriverType) -> Vec<String> {
+    let (_, terminators) = split_with_body_terminators(statement, driver);
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for terminator in terminators.iter().filter(|terminator| terminator.after_complete_statement) {
+        let part = statement[start..terminator.offset].trim();
+        if !part.is_empty() {
+            parts.push(part.to_owned());
+        }
+        start = terminator.offset + 1;
+    }
+    if parts.is_empty() {
+        return vec![statement.to_owned()];
+    }
+    let tail = statement[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail.to_owned());
+    }
+    parts
+}
+
 /// True when `sql` is a single, self-contained expression fragment — no
 /// statement terminator, no comments, balanced parentheses. Used to vet raw
 /// expression text (RLS `USING`/`WITH CHECK` bodies) before it is embedded in
@@ -486,6 +617,33 @@ pub(crate) fn has_top_level_sql_keyword(sql: &str, expected: &str, backslash_esc
             SqlTokenKind::Word if depth == 0 && token_is_word(sql, token, expected) => return true,
             _ => {}
         }
+    }
+    false
+}
+
+/// Whether `character` appears at parenthesis depth 0 outside strings, quoted
+/// identifiers, comments and dollar quotes, honouring the driver's string rules.
+///
+/// Only `;` and `=` matter to callers today; the byte-level walk is what keeps a
+/// `PRAGMA` setter (`PRAGMA journal_mode = wal`) distinguishable from its reader
+/// spelling (`PRAGMA table_info(t)`) without a second tokenizer (#589).
+pub(crate) fn has_top_level_operator(sql: &str, character: u8, driver: DriverType) -> bool {
+    let backslash_escapes = backslash_escapes_for_driver(driver);
+    let bytes = sql.as_bytes();
+    let mut depth = 0usize;
+    let mut index = 0;
+    while index < bytes.len() {
+        if let Some(end) = special_token_end(bytes, index, backslash_escapes) {
+            index = end;
+            continue;
+        }
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            byte if byte == character && depth == 0 => return true,
+            _ => {}
+        }
+        index += 1;
     }
     false
 }

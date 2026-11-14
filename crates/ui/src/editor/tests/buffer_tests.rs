@@ -121,3 +121,72 @@ fn grapheme_boundaries_span_zwj_emoji() {
         assert_eq!(buf.prev_grapheme_boundary(off), 0, "from {off}");
     }
 }
+
+/// The incremental line index must agree with a full rebuild after every edit
+/// shape: single-char insert, newline insert, mid-line delete, multi-line
+/// replace, and undo (#580).
+#[test]
+fn incremental_line_index_matches_full_rebuild_580() {
+    fn rebuild_reference(buf: &TextBuffer) -> (Vec<usize>, usize) {
+        let mut starts = vec![0usize];
+        for (idx, byte) in buf.text().as_bytes().iter().enumerate() {
+            if *byte == b'\n' {
+                starts.push(idx + 1);
+            }
+        }
+        let max = (0..starts.len())
+            .map(|line| buf.line_at(line).unwrap_or("").chars().count())
+            .max()
+            .unwrap_or(0);
+        (starts, max)
+    }
+
+    let mut buf = TextBuffer::from_string("SELECT 1;\nSELECT 2;\nSELECT 3;\n");
+    let snap = |offset: usize| EditorSnapshot {
+        cursor_offset: offset,
+        anchor_offset: offset,
+    };
+
+    let cases: Vec<Box<dyn Fn(&mut TextBuffer)>> = vec![
+        Box::new(|buf: &mut TextBuffer| buf.insert_with_snapshot(8, "x", snap(8), snap(9))),
+        Box::new(|buf: &mut TextBuffer| buf.type_text(9, "\n", snap(9), snap(10))),
+        Box::new(|buf: &mut TextBuffer| {
+            buf.delete_with_snapshot(3, 5, snap(5), snap(3));
+        }),
+        Box::new(|buf: &mut TextBuffer| buf.replace(20, 28, "SELECT 9;\n")),
+        Box::new(|buf: &mut TextBuffer| buf.insert_with_snapshot(0, "Xin chào\n", snap(0), snap(10))),
+        Box::new(|buf: &mut TextBuffer| {
+            buf.undo();
+        }),
+    ];
+
+    for (index, edit) in cases.iter().enumerate() {
+        edit(&mut buf);
+        let reference = rebuild_reference(&buf);
+        assert_eq!(buf.line_starts_for_test(), reference.0, "case {index}");
+        assert_eq!(
+            buf.max_line_len_chars(),
+            reference.1,
+            "case {index}"
+        );
+        assert_eq!(buf.line_count(), reference.0.len(), "case {index}");
+    }
+}
+
+#[test]
+fn typing_in_a_long_line_updates_max_line_chars_580() {
+    let mut buf = TextBuffer::from_string("short\n");
+    let snap = |offset: usize| EditorSnapshot {
+        cursor_offset: offset,
+        anchor_offset: offset,
+    };
+    for index in 0..40 {
+        let offset = 5 + index;
+        buf.type_text(offset, "a", snap(offset), snap(offset + 1));
+    }
+    assert_eq!(buf.max_line_len_chars(), 45);
+    assert_eq!(buf.line_count(), 2);
+    buf.delete_with_snapshot(5, 45, snap(45), snap(5));
+    assert_eq!(buf.max_line_len_chars(), 7);
+    assert_eq!(buf.line_count(), 2);
+}

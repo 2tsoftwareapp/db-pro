@@ -42,7 +42,10 @@ pub struct DbProApp {
     saved_tasks: SavedTaskState,
     /// Installed by the native shell. Copy refuses to run when this is absent.
     table_copy: Option<std::sync::Arc<dyn db_pro_core::application::TableCopyConnector>>,
-    /// Counter for initial render frames to ensure window is maximized on startup.
+    /// Frames rendered so far; drives first-frame-only shell setup.
+    ///
+    /// #573: this used to re-send `Maximized(true)` for the first three frames,
+    /// which overrode the window frame eframe had just restored.
     initial_frames_count: u8,
     gallery_state: component_gallery_view::ComponentGalleryState,
     #[cfg(debug_assertions)]

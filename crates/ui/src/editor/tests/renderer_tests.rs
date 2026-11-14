@@ -574,3 +574,93 @@ fn shift_tab_unindent_shifts_anchor_by_actual_removal() {
     assert_eq!(result, "ab\ncd");
     assert_eq!(selection.normalized(), (1, 5));
 }
+
+#[test]
+fn ime_preedit_tracks_the_composition_string() {
+    // #570: the editor used to ignore `ImeEvent::Preedit`, so a composing IME
+    // showed nothing at all until commit.
+    use super::{ImePreedit, Id};
+
+    let event = egui::ImeEvent::Preedit("tiếng Việ".to_owned(), Some((3, 6)));
+    let preedit = ImePreedit::from_event(&event).expect("preedit events are captured");
+    assert_eq!(preedit.text, "tiếng Việ");
+    assert!(!preedit.is_empty());
+    let (before, after) = preedit.around_cursor();
+    assert_eq!(before, "tiế");
+    assert_eq!(after, "ng Việ");
+    // `Id` round-trips through the key helper so the paint pass reads the same slot.
+    let editor_id = Id::new("editor");
+    assert_eq!(super::ime_preedit_key(editor_id), editor_id.with("ime_preedit"));
+}
+
+#[test]
+fn commit_and_cancel_clear_the_preedit() {
+    use super::ImePreedit;
+
+    assert!(ImePreedit::from_event(&egui::ImeEvent::Commit("a".to_owned())).is_none());
+    assert!(ImePreedit::from_event(&egui::ImeEvent::Enabled).is_none());
+    let cleared = ImePreedit::from_event(&egui::ImeEvent::Preedit(String::new(), None))
+        .expect("an empty preedit is still a preedit event");
+    assert!(cleared.is_empty());
+    assert_eq!(cleared.around_cursor(), (String::new(), String::new()));
+}
+
+/// Render the editor twice in one context: preedit, then a read-only pass that
+/// observes whether the composition survived the frame boundary.
+fn render_preedit_then_read(preedit: &str) -> (String, super::ImePreedit) {
+    use super::{read_ime_preedit, SqlEditor};
+
+    let ctx = egui::Context::default();
+    let mut buffer = TextBuffer::from_string("");
+    let mut cursor = CursorPosition::from_offset(&buffer, 0);
+    let mut selection = SelectionRange::default();
+    let theme = DbProTheme::dark();
+    let id_salt = "ime-preedit-editor";
+
+    let _ = crate::test_frame::frame(
+        &ctx,
+        egui::RawInput {
+            focused: true,
+            events: vec![egui::Event::Ime(egui::ImeEvent::Preedit(
+                preedit.to_owned(),
+                Some((0, preedit.chars().count())),
+            ))],
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let editor_id = ui.make_persistent_id(id_salt);
+                ui.memory_mut(|memory| memory.request_focus(editor_id));
+                let _ = SqlEditor::new(
+                    &mut buffer,
+                    &mut cursor,
+                    &mut selection,
+                    SqlDialect::Postgres,
+                    &theme,
+                    &[],
+                    None,
+                    id_salt,
+                )
+                .show(ui, egui::vec2(600.0, 400.0));
+            });
+        },
+    );
+
+    let mut observed = super::ImePreedit::default();
+    let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let editor_id = ui.make_persistent_id(id_salt);
+            observed = read_ime_preedit(ui, editor_id);
+        });
+    });
+    (buffer.text().to_owned(), observed)
+}
+
+#[test]
+fn preedit_is_visible_to_the_next_frame_without_touching_the_buffer() {
+    // #570: the composition string is state, not text — it must survive the
+    // frame so the paint pass can draw it, and it must not be inserted.
+    let (text, preedit) = render_preedit_then_read("tiếng Việt");
+    assert_eq!(text, "", "preedit must not be committed to the buffer");
+    assert_eq!(preedit.text, "tiếng Việt");
+}

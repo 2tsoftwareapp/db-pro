@@ -17,6 +17,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let mut state = TableMutationState {
             table_mutation_error: Some(MutationFailure {
@@ -44,6 +45,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let mut state = TableMutationState::default();
         state.staged_changes.stage_update(StagedChange::Update {
@@ -59,6 +61,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("8".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(3),
         });
@@ -102,6 +105,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["tenant_id".to_owned(), "id".to_owned()],
             original_pk_values: vec![UiCell::Text("tenant-a".to_owned()), UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
 
         let filters = TableMutationState::row_reload_filters(&info, &identity).expect("filters");

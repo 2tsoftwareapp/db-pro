@@ -128,3 +128,46 @@ fn native_text_edit_selection_recolors_only_selected_glyphs_in_both_themes() {
         assert_eq!(value, "abcdef");
     }
 }
+
+/// #585: a focused-but-unselected editor must not trigger the shape walk.
+#[test]
+fn caret_only_focus_does_not_count_as_a_selection() {
+    let ctx = Context::default();
+    crate::DbProTheme::install_fonts(&ctx);
+    let mut text_edit_id = None;
+    let _ = crate::test_frame::frame(&ctx, Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let mut text = "SELECT 1;".to_owned();
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut text) // ui-rules: #585 probe for the raw egui TextEdit state
+                    .text_color(crate::DbProTheme::light().text_secondary),
+            );
+            text_edit_id = Some(response.id.with("text"));
+        });
+    });
+    let id = text_edit_id.expect("text edit id");
+    // The widget stored a cursor with `primary == secondary` (no selection).
+    let state = egui::text_edit::TextEditState::load(&ctx, id).expect("text edit state");
+    if let Some(cursor) = state.cursor.char_range() {
+        assert_eq!(cursor.primary, cursor.secondary);
+    }
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    assert!(!has_selected_text(&ctx), "caret-only focus selects nothing");
+}
+
+/// #585: an explicit cursor range (anchor != primary) *is* a selection, so the
+/// styling pass still runs for real selections.
+#[test]
+fn explicit_cursor_range_counts_as_a_selection() {
+    let ctx = Context::default();
+    crate::DbProTheme::install_fonts(&ctx);
+    let id = egui::Id::new("db-pro-selection-probe");
+    let mut state = egui::text_edit::TextEditState::default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(0),
+        egui::text::CCursor::new(4),
+    )));
+    state.store(&ctx, id);
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    assert!(has_selected_text(&ctx));
+}

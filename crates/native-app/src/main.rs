@@ -292,6 +292,7 @@ fn developer_preset_connection() -> Option<db_pro_core::domain::connection::Conn
         favorite: false,
         environment: Default::default(),
         readonly: false,
+        create_if_missing: false,
     })
 }
 
@@ -330,6 +331,7 @@ fn sample_sqlite_connection_config(path: &std::path::Path) -> db_pro_core::domai
         favorite: true,
         environment: Default::default(),
         readonly: true,
+        create_if_missing: true,
     }
 }
 
@@ -468,6 +470,7 @@ fn sample_enterprise_pg_connection_config() -> db_pro_core::domain::connection::
         favorite: true,
         environment: Default::default(),
         readonly: false,
+        create_if_missing: false,
     }
 }
 
@@ -540,6 +543,14 @@ async fn send_ui_event_with_backpressure(event_tx: &SyncSender<UiEvent>, mut eve
 /// (`docs/10-egui-native-migration-plan.md`), and a maximized window renders at
 /// whatever the monitor happens to be. Unset or malformed means "maximize as usual",
 /// so this is inert for a normal launch.
+/// Smallest usable shell: sidebar (240) + editor (560) + result gutter.
+const MIN_WINDOW_WIDTH: f32 = 800.0;
+/// Header + editor + at least four result rows.
+const MIN_WINDOW_HEIGHT: f32 = 560.0;
+/// First-launch size when no persisted frame is available.
+const DEFAULT_WINDOW_WIDTH: f32 = 1280.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+
 fn capture_window_size() -> Option<[f32; 2]> {
     let raw = non_empty_env("DB_PRO_WINDOW_SIZE")?;
     parse_window_size(&raw.to_string_lossy())
@@ -571,7 +582,10 @@ fn run_native_app(
         .with_title("DB Pro")
         .with_icon(app_icon)
         .with_decorations(!cfg!(target_os = "linux"))
-        .with_min_inner_size([1024.0, 640.0]);
+        // #577: the shell lays out a sidebar + editor + result grid side by side;
+        // below this the panes clamp against each other and the toolbar wraps
+        // into the title bar.
+        .with_min_inner_size([MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT]);
     viewport = match pinned_size {
         // A `visible:false` window never receives drawRect on macOS, so the
         // first frame may never paint and the capture stalls before the first
@@ -579,7 +593,12 @@ fn run_native_app(
         // resize storm instead. X11 keeps painting an unmapped window, so there
         // a capture run stays off-screen instead of flashing over the user.
         Some(size) => viewport.with_inner_size(size).with_visible(!cfg!(target_os = "linux")),
-        None => viewport.with_maximized(true),
+        // #573: no `with_maximized` here. eframe restores the user's persisted
+        // window frame (`persist_window: true`), and forcing the maximized flag
+        // at creation discarded both the saved size and the saved position on
+        // every launch. A first run simply opens at the builder default, which
+        // the platform sizes to a comfortable fraction of the screen.
+        None => viewport.with_inner_size([DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT]),
     };
 
     let options = eframe::NativeOptions {
@@ -595,13 +614,9 @@ fn run_native_app(
         "DB Pro",
         options,
         Box::new(move |creation_context| {
-            // Re-apply the product default after eframe restores its persisted window
-            // frame — unless a capture run pinned an exact viewport.
-            if pinned_size.is_none() {
-                creation_context
-                    .egui_ctx
-                    .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-            }
+            // #573: nothing here re-sends `Maximized(true)`. eframe has already
+            // restored the persisted frame; re-applying it overrode a window the
+            // user had resized (and moved) between sessions.
             DbProTheme::install_fonts(&creation_context.egui_ctx);
             // egui paints a red "Nth use of ScrollArea ID …" overlay wherever two
             // widgets claim the same id. That is a developer signal, so it stays on

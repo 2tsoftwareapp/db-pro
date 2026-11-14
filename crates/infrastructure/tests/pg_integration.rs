@@ -74,7 +74,8 @@ fn pg_config() -> Option<ConnectionConfig> {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    })
+        create_if_missing: false,
+})
 }
 
 /// The password half of `DATABASE_URL`, for the connect calls that `pg_config()` does not carry.

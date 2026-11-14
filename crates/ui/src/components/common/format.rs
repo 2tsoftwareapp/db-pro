@@ -1,3 +1,43 @@
+/// Placeholder shown when the database did not report a value.
+pub const VALUE_ABSENT: &str = "—";
+
+/// Renders an optional value for display without leaking Rust's `Debug` syntax.
+///
+/// Audit #569: monitoring, replication, FDW and task screens printed
+/// `Option<u64>` / enums with `{:?}`, so users saw `xact_age=Some(5321)` and
+/// `slot=None` in the UI. `None` becomes [`VALUE_ABSENT`] (`—`) and `Some(v)`
+/// renders as `v`.
+pub fn fmt_opt<T: std::fmt::Display>(value: Option<T>) -> String {
+    match value {
+        Some(value) => value.to_string(),
+        None => VALUE_ABSENT.to_owned(),
+    }
+}
+
+/// Optional duration in milliseconds (`—`, `812ms`, `5.32s`, `2m 14s`).
+pub fn fmt_opt_duration_millis(milliseconds: Option<u64>) -> String {
+    milliseconds.map_or_else(|| VALUE_ABSENT.to_owned(), format_duration_millis)
+}
+
+/// `Showing 20 of 137` for lists that are deliberately capped.
+///
+/// #569: capped lists used to stop silently, so a lock screen with 200 blockers
+/// looked exactly like one with 30.
+pub fn format_shown_total(shown: usize, total: usize) -> String {
+    if shown >= total {
+        return format!("{total}");
+    }
+    format!("Showing {shown} of {total}")
+}
+
+/// `Some("Showing 80 of 412")` only when the list is actually truncated (#569).
+///
+/// Capped lists call this so the hint never appears for a complete list.
+pub fn shown_total_hint(shown: usize, total: usize) -> Option<String> {
+    (shown < total).then(|| format_shown_total(shown, total))
+}
+
+
 /// Safely truncates a string to at most `max_chars` characters, appending `…` if truncated.
 ///
 /// This avoids splitting unicode multi-byte character boundaries and provides consistent

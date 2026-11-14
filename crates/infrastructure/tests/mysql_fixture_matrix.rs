@@ -61,7 +61,8 @@ fn mysql_config() -> Option<(ConnectionConfig, String)> {
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        },
+            create_if_missing: false,
+},
         password.to_string(),
     ))
 }

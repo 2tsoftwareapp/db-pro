@@ -49,7 +49,8 @@ fn mysql_config() -> Option<ConnectionConfig> {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    })
+        create_if_missing: false,
+})
 }
 
 async fn setup() -> Option<(MySqlConnector, ConnectionHandle, String)> {
@@ -667,7 +668,8 @@ fn mysql_reserved_fields_fixture() -> Option<(ConnectionConfig, String, String)>
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     Some((
         config,
         required("DB_PRO_MYSQL_452_PASSWORD"),

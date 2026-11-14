@@ -41,7 +41,8 @@ async fn setup_fixture() -> (SQLiteConnector, db_pro_core::domain::connection::C
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
 
     let handle = connector.connect(&config, "").await.expect("connect failed");
 
@@ -196,7 +197,8 @@ async fn test_connection_succeeds() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     connector.test_connection(&config, "").await.unwrap();
 }
 
@@ -224,7 +226,8 @@ async fn sqlite_query_timeout_interrupts_vm_and_actor_recovers() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
 
     let query = "WITH RECURSIVE numbers(value) AS (\
@@ -264,7 +267,8 @@ async fn sqlite_query_cancel_interrupts_vm_and_waits_for_actor_recovery() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
     let expensive_query = "WITH RECURSIVE numbers(value) AS (\
         SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 100000\
@@ -305,7 +309,8 @@ async fn sqlite_transaction_timeout_waits_for_rollback_before_returning() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
     connector
         .execute(&handle, "CREATE TABLE timeout_probe (id INTEGER)", &[])
@@ -364,7 +369,8 @@ async fn sqlite_transaction_commit_failure_reports_unknown_outcome() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
     connector
         .execute(&handle, "PRAGMA foreign_keys = ON", &[])
@@ -423,7 +429,8 @@ async fn sqlite_execute_batch_timeout_waits_for_rollback_before_returning() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
     connector
         .execute(&handle, "CREATE TABLE batch_timeout_probe (id INTEGER)", &[])

@@ -1,6 +1,7 @@
 //! Result-grid clipboard, export formatting, and copy helpers.
 use super::result_grid_view::GridSelectionLookup;
 use super::*;
+use db_pro_core::application::DelimitedSafety;
 
 impl DbProApp {
     pub(super) fn copy_selected_cell(&mut self, ui: &mut egui::Ui, result: &UiQueryResult) {
@@ -297,7 +298,9 @@ impl DbProApp {
         let header = result
             .columns
             .iter()
-            .map(|column| result_grid_export::escape_delimited_field(&column.name, ','))
+            .map(|column| {
+                result_grid_export::escape_delimited_field_with(&column.name, ',', DelimitedSafety::Raw)
+            })
             .collect::<Vec<_>>()
             .join(",");
         let row_values = (0..result.columns.len())
@@ -317,7 +320,9 @@ impl DbProApp {
         let header = result
             .columns
             .iter()
-            .map(|column| result_grid_export::escape_delimited_field(&column.name, ','))
+            .map(|column| {
+                result_grid_export::escape_delimited_field_with(&column.name, ',', DelimitedSafety::Raw)
+            })
             .collect::<Vec<_>>()
             .join(",");
         let mut lines = vec![header];

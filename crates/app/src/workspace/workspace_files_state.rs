@@ -1,5 +1,8 @@
 use super::*;
 
+/// Hits kept from one workspace search (#579).
+const SEARCH_HIT_LIMIT: usize = 100;
+
 /// Presentation state for the local SQL workspace and its file/Git activity.
 ///
 /// Database connection state and workspace navigation stay outside this aggregate:
@@ -40,6 +43,27 @@ pub(crate) struct WorkspaceFilesState {
     pub(super) panel_tab: FilesPanelTab,
     pub(super) pending_replace_all: bool,
     pub(super) pending_shell: bool,
+    /// Shell command running on a worker thread (#579). The reducer no longer
+    /// blocks on `Command::output()`; output streams into `task_output` and the
+    /// Cancel button calls `kill()`.
+    pub(super) task: Option<ide_workspace_scan::WorkspaceTaskHandle>,
+    /// Last [`ide_workspace_scan::TASK_OUTPUT_MAX_LINES`] output lines of the
+    /// running (or last finished) task.
+    pub(super) task_output: Vec<String>,
+    /// Search / replace-preview / replace-all running on a worker thread
+    /// (#579); `(intent, receiver)` — see [`WorkspaceReadIntent`].
+    pub(super) read_task: Option<(
+        WorkspaceReadIntent,
+        std::sync::mpsc::Receiver<ide_workspace_scan::WorkspaceReadOutcome>,
+    )>,
+}
+
+/// What a finished [`WorkspaceFilesState::read_task`] should update (#579).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkspaceReadIntent {
+    Search,
+    PreviewReplace,
+    ReplaceAll,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -194,7 +218,11 @@ impl WorkspaceFilesState {
     /// True while a scan/file-read worker still owns results to apply — the
     /// frame loop keeps repainting until they drain.
     pub(super) fn background_tasks_in_flight(&self) -> bool {
-        self.git_task.is_some() || self.scan_task.is_some() || !self.file_read_tasks.is_empty()
+        self.git_task.is_some()
+            || self.scan_task.is_some()
+            || !self.file_read_tasks.is_empty()
+            || self.task.is_some()
+            || self.read_task.is_some()
     }
 
     /// Drain a finished background scan into the workspace tree (#393).
@@ -233,21 +261,106 @@ impl WorkspaceFilesState {
         done
     }
 
+    /// Kick a workspace search onto a worker thread (#579).
+    ///
+    /// The search itself is `plan_read` + `spawn_search_task`; nothing on this
+    /// path reads a file, so a 5.000-file workspace cannot stall a frame.
     pub(super) fn run_search(&mut self, feedback: &mut FeedbackState) {
         if self.ide_workspace.roots.is_empty() {
             self.workspace_search_hits.clear();
             feedback.set_runtime_message(t!("workspace.open_folder_first"));
             return;
         }
-        self.workspace_search_hits = self.ide_workspace.search(&self.workspace_search_query, 100);
-        feedback.set_runtime_message(t!("workspace.matches_count", n = self.workspace_search_hits.len()).as_ref());
+        if self.workspace_search_query.is_empty() {
+            self.workspace_search_hits.clear();
+            return;
+        }
+        let snapshot = self.ide_workspace.read_snapshot();
+        let root_ids = self.ide_workspace.root_ids();
+        let receiver = ide_workspace_scan::spawn_search_task(
+            snapshot,
+            root_ids,
+            self.workspace_search_query.clone(),
+            SEARCH_HIT_LIMIT,
+        );
+        self.read_task = Some((WorkspaceReadIntent::Search, receiver));
+        feedback.set_runtime_message("Searching…");
     }
 
     pub(super) fn preview_replace(&mut self, feedback: &mut FeedbackState) {
-        self.workspace_replace_previews = self
-            .ide_workspace
-            .preview_replace(&self.workspace_search_query, &self.workspace_replace_query);
-        feedback.set_runtime_message(t!("workspace.files_would_change", n = self.workspace_replace_previews.len()).as_ref());
+        if self.workspace_search_query.is_empty() {
+            self.workspace_replace_previews.clear();
+            return;
+        }
+        let snapshot = self.ide_workspace.read_snapshot();
+        let root_ids = self.ide_workspace.root_ids();
+        let receiver = ide_workspace_scan::spawn_preview_replace_task(
+            snapshot,
+            root_ids,
+            self.workspace_search_query.clone(),
+        );
+        self.read_task = Some((WorkspaceReadIntent::PreviewReplace, receiver));
+        feedback.set_runtime_message("Previewing replacements…");
+    }
+
+    /// Drain a finished background read (#579) and update the matching list.
+    /// Returns `true` when a result was applied.
+    pub(super) fn poll_read_task(&mut self, feedback: &mut FeedbackState) -> bool {
+        let Some((intent, receiver)) = self.read_task.as_ref() else {
+            return false;
+        };
+        let outcome = match receiver.try_recv() {
+            Ok(outcome) => outcome,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.read_task = None;
+                feedback.set_runtime_message("workspace read ended without a result");
+                return true;
+            }
+        };
+        let intent = *intent;
+        self.read_task = None;
+        match outcome {
+            ide_workspace_scan::WorkspaceReadOutcome::Hits(hits) => {
+                let count = hits.len();
+                self.workspace_search_hits = hits;
+                feedback.set_runtime_message(t!("workspace.matches_count", n = count).as_ref());
+            }
+            ide_workspace_scan::WorkspaceReadOutcome::Previews(previews) => {
+                let count = previews.len();
+                self.workspace_replace_previews = previews;
+                feedback.set_runtime_message(t!("workspace.files_would_change", n = count).as_ref());
+            }
+            ide_workspace_scan::WorkspaceReadOutcome::Replaced(result) => {
+                self.finish_replace_all(intent, result, feedback);
+            }
+        }
+        true
+    }
+
+    /// Publish the replace-all count and re-run search/preview on the worker.
+    fn finish_replace_all(
+        &mut self,
+        intent: WorkspaceReadIntent,
+        result: Result<usize, String>,
+        feedback: &mut FeedbackState,
+    ) {
+        let _ = intent;
+        match result {
+            Ok(count) => {
+                feedback.set_runtime_message(t!("workspace.replaced_count", n = count).as_ref());
+                // The files changed on disk: drop the cached dependency edges
+                // (#578) and refresh both derived lists off the UI thread.
+                self.ide_workspace.invalidate_dependency_edges();
+                self.preview_replace(feedback);
+            }
+            Err(error) => feedback.set_runtime_message(error),
+        }
+    }
+
+    /// True while a workspace read runs (#579).
+    pub(super) fn read_task_in_flight(&self) -> bool {
+        self.read_task.is_some()
     }
 
     pub(super) fn request_replace_all(&mut self, feedback: &mut FeedbackState) {
@@ -263,18 +376,26 @@ impl WorkspaceFilesState {
         self.apply_replace(feedback);
     }
 
+    /// Replace across the workspace on a worker thread (#579).
     pub(super) fn apply_replace(&mut self, feedback: &mut FeedbackState) {
-        match self
-            .ide_workspace
-            .apply_replace(&self.workspace_search_query, &self.workspace_replace_query)
-        {
-            Ok(count) => {
-                self.preview_replace(feedback);
-                self.run_search(feedback);
-                feedback.set_runtime_message(t!("workspace.replaced_count", n = count).as_ref());
-            }
-            Err(error) => feedback.set_runtime_message(error),
+        if !self.ide_workspace.is_trusted() {
+            feedback.set_runtime_message("trust the workspace before replace-in-files");
+            return;
         }
+        if self.workspace_search_query.is_empty() {
+            feedback.set_runtime_message("empty search");
+            return;
+        }
+        // The replace path needs the current index *and* a trust check, both of
+        // which have already been validated above.
+        let snapshot = self.ide_workspace.read_snapshot();
+        let receiver = ide_workspace_scan::spawn_apply_replace_task(
+            snapshot,
+            self.workspace_search_query.clone(),
+            self.workspace_replace_query.clone(),
+        );
+        self.read_task = Some((WorkspaceReadIntent::ReplaceAll, receiver));
+        feedback.set_runtime_message("Replacing…");
     }
 
     pub(super) fn add_context_item(&mut self, item: String) {
@@ -316,25 +437,111 @@ impl WorkspaceFilesState {
         self.run_task(feedback);
     }
 
+    /// Start the typed command on a worker thread (#579).
+    ///
+    /// Nothing here touches the disk or waits on a process, so a `sleep 30`
+    /// leaves the frame loop at 60 fps with a working Cancel button.
     pub(super) fn run_task(&mut self, feedback: &mut FeedbackState) {
-        let command = self.workspace_task_command.clone();
-        match self.ide_workspace.run_task(&command) {
-            Ok(result) => {
-            feedback.set_runtime_message(
-                t!("workspace.task_exit", code = format!("{:?}", result.exit_code).as_str(), ms = result.duration_ms).as_ref(),
-            )
-            }
+        let command = self.workspace_task_command.trim().to_owned();
+        match self.start_task(&command) {
+            Ok(()) => feedback.set_runtime_message(format!("Running: {command}")),
             Err(error) => feedback.set_runtime_message(error),
         }
     }
 
-    pub(super) fn apply_refactor(&mut self, feedback: &mut FeedbackState) {
-        let from = self.workspace_refactor_from.clone();
-        let to = self.workspace_refactor_to.clone();
-        match self.ide_workspace.rename_symbol_across_sql(&from, &to) {
-            Ok(count) => feedback.set_runtime_message(t!("workspace.refactored_count", n = count).as_ref()),
-            Err(error) => feedback.set_runtime_message(error),
+    /// Validate and spawn; all refusals are guard clauses so the happy path
+    /// stays flat.
+    fn start_task(&mut self, command: &str) -> Result<(), String> {
+        if command.is_empty() {
+            return Err("type a command to run".to_owned());
         }
+        if !self.ide_workspace.is_trusted() {
+            return Err("trust the workspace before running tasks/terminal commands".to_owned());
+        }
+        if self.task.is_some() {
+            return Err("a task is already running — cancel it first".to_owned());
+        }
+        let cwd = self
+            .ide_workspace
+            .primary_path()
+            .map(|path| path.to_path_buf())
+            .ok_or_else(|| t!("workspace.open_folder_first").into_owned())?;
+        let handle = ide_workspace_scan::spawn_task_task(command.to_owned(), cwd)
+            .map_err(|error| error.to_string())?;
+        self.task_output.clear();
+        self.task = Some(handle);
+        Ok(())
+    }
+
+    /// Stop the running task via `child.kill()` (#579).
+    pub(super) fn cancel_task(&mut self, feedback: &mut FeedbackState) {
+        let Some(task) = self.task.as_ref() else {
+            return;
+        };
+        task.kill();
+        feedback.set_runtime_message(format!("Cancelling: {}", task.command));
+    }
+
+    /// Drain streamed task output (#579). Returns the exit code once the task
+    /// has finished; `last_task` is published at the same moment.
+    pub(super) fn poll_task(&mut self) -> Option<Option<i32>> {
+        let code = self.drain_task_events()?;
+        let duration_ms = self.task.as_ref().map_or(0, |task| task.elapsed_ms());
+        let command = self.task.as_ref().map_or_else(String::new, |task| task.command.clone());
+        self.task = None;
+        self.ide_workspace.last_task = Some(ide_workspace::TaskRunResult {
+            command,
+            exit_code: code,
+            stdout: self.task_output.join("\n"),
+            stderr: String::new(),
+            duration_ms,
+        });
+        Some(code)
+    }
+
+    /// Move queued lines into the bounded ring; returns the exit code when the
+    /// worker signalled termination.
+    fn drain_task_events(&mut self) -> Option<Option<i32>> {
+        let task = self.task.as_mut()?;
+        loop {
+            match task.receiver.try_recv() {
+                Ok(ide_workspace_scan::TaskEvent::Line(line)) => {
+                    if self.task_output.len() >= ide_workspace_scan::TASK_OUTPUT_MAX_LINES {
+                        self.task_output.remove(0);
+                    }
+                    self.task_output.push(line);
+                }
+                Ok(ide_workspace_scan::TaskEvent::Exit(code)) => return Some(code),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return Some(None),
+            }
+        }
+    }
+
+    /// True while a shell task streams output (#579) — keeps repaints coming.
+    pub(super) fn task_in_flight(&self) -> bool {
+        self.task.is_some()
+    }
+
+    /// Rename a symbol across the workspace on a worker thread (#579).
+    ///
+    /// Refactoring is a workspace-wide replace, so it reuses the replace
+    /// worker instead of blocking the reducer.
+    pub(super) fn apply_refactor(&mut self, feedback: &mut FeedbackState) {
+        let from = self.workspace_refactor_from.trim().to_owned();
+        let to = self.workspace_refactor_to.trim().to_owned();
+        if from.is_empty() || to.is_empty() {
+            feedback.set_runtime_message("from/to required");
+            return;
+        }
+        if !self.ide_workspace.is_trusted() {
+            feedback.set_runtime_message("trust the workspace before refactoring");
+            return;
+        }
+        let snapshot = self.ide_workspace.read_snapshot();
+        let receiver = ide_workspace_scan::spawn_apply_replace_task(snapshot, from, to);
+        self.read_task = Some((WorkspaceReadIntent::ReplaceAll, receiver));
+        feedback.set_runtime_message("Refactoring…");
     }
 
     pub(super) fn refresh_schema_drift_watch(&mut self, schema_names: &[String], feedback: &mut FeedbackState) {

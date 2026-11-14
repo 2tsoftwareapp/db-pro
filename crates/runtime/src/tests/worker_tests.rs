@@ -72,7 +72,8 @@ async fn cancel_test_connection_command_closes_the_pending_provider_socket() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     command_tx
         .send(RuntimeCommand::TestConnection {
             request_id,
@@ -181,7 +182,8 @@ async fn disconnect_closes_sqlite_memory_and_reconnect_opens_a_new_database() {
                 favorite: false,
                 environment: Default::default(),
                 readonly: false,
-            },
+                create_if_missing: false,
+},
             "",
         )
         .await
@@ -343,7 +345,8 @@ async fn execute_query_returns_a_row_from_a_sqlite_file() {
                 favorite: false,
                 environment: Default::default(),
                 readonly: false,
-            },
+                create_if_missing: false,
+},
             "",
         )
         .await

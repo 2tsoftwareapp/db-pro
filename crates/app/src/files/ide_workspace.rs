@@ -9,7 +9,6 @@ pub(crate) use super::ide_workspace_types::*;
 
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 impl IdeWorkspaceState {
@@ -37,7 +36,9 @@ impl IdeWorkspaceState {
     pub fn open_root(&mut self, root: PathBuf) -> Result<(), String> {
         self.roots.clear();
         self.active_root = 0;
-        self.add_root(root)
+        let added = self.add_root(root);
+        self.bump_index_epoch();
+        added
     }
 
     pub fn add_root(&mut self, root: PathBuf) -> Result<(), String> {
@@ -137,6 +138,7 @@ impl IdeWorkspaceState {
         if !self.roots.is_empty() {
             self.last_error = None;
         }
+        self.bump_index_epoch();
         let indexed = self.roots.iter().map(|root| root.index.len()).sum();
         (indexed, error)
     }
@@ -146,6 +148,7 @@ impl IdeWorkspaceState {
             return;
         }
         self.roots.remove(self.active_root);
+        self.bump_index_epoch();
         if self.active_root >= self.roots.len() {
             self.active_root = self.roots.len().saturating_sub(1);
         }
@@ -156,6 +159,7 @@ impl IdeWorkspaceState {
 
     pub fn close(&mut self) {
         self.roots.clear();
+        self.bump_index_epoch();
         self.active_root = 0;
         self.expanded.clear();
         self.last_error = None;
@@ -184,6 +188,7 @@ impl IdeWorkspaceState {
         for root in roots {
             self.add_root(root.path)?;
         }
+        self.bump_index_epoch();
         Ok(())
     }
 
@@ -246,7 +251,8 @@ impl IdeWorkspaceState {
             .open(&path)
             .map_err(|error| error.to_string())?;
         file.write_all(contents.as_bytes()).map_err(|e| e.to_string())?;
-        self.refresh()?;
+        // #579: single-path index update, no recursive rescan.
+        self.sync_path(&root_id, &path)?;
         Ok(path)
     }
 
@@ -267,6 +273,7 @@ impl IdeWorkspaceState {
             return Err("folder escapes workspace root".to_owned());
         }
         std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+        // A new directory has no index entries yet; the worker path re-scans.
         self.refresh()?;
         Ok(path)
     }
@@ -299,7 +306,14 @@ impl IdeWorkspaceState {
         std::fs::rename(&absolute, &dest).map_err(|e| e.to_string())?;
         let new_key = relative_dest.to_string_lossy().replace('\\', "/");
         remap_expanded_prefix(&mut self.expanded, &old_key, &new_key);
-        self.refresh()?;
+        // #579: rename = forget old index entry + add the new one.
+        if dest.is_dir() {
+            self.refresh()?;
+        } else {
+            self.forget_path(&root_id, &old_key)?;
+            self.sync_path(&root_id, &dest)?;
+            self.expanded.insert(new_key);
+        }
         Ok(dest)
     }
 
@@ -330,68 +344,44 @@ impl IdeWorkspaceState {
             }
         }
         prune_expanded_subtree(&mut self.expanded, &old_key);
-        self.refresh()?;
+        // #579: prune the subtree from the cached index instead of rescanning.
+        let root_id = self
+            .root_and_relative_path(relative)
+            .map(|(root, _)| root.id.clone())
+            .unwrap_or_default();
+        if root_id.is_empty() {
+            self.refresh()?;
+        } else {
+            self.forget_path(&root_id, &old_key)?;
+        }
         Ok(())
     }
 
+    /// Blocking workspace search.
+    ///
+    /// The draw path must use [`ide_workspace_scan::spawn_search_task`] instead
+    /// (#579); this stays for tests and CLI-style callers.
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        let mut hits = Vec::new();
-        if query.is_empty() {
-            return hits;
-        }
-        let needle = query.to_lowercase();
-        for root in &self.roots {
-            for entry in &root.index {
-                if hits.len() >= limit {
-                    return hits;
-                }
-                let path = root.path.join(&entry.relative_path);
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                for (line_idx, line) in content.lines().enumerate() {
-                    if line.to_lowercase().contains(&needle) {
-                        hits.push(SearchHit {
-                            root_id: root.id.clone(),
-                            relative_path: entry.relative_path.clone(),
-                            line: line_idx + 1,
-                            preview: line.chars().take(160).collect(),
-                        });
-                        if hits.len() >= limit {
-                            return hits;
-                        }
-                    }
-                }
-            }
-        }
-        hits
+        ide_workspace_scan::search_snapshot(&self.read_snapshot(), &self.root_ids(), query, limit)
     }
 
-    pub fn preview_replace(&self, query: &str, replacement: &str) -> Vec<ReplacePreview> {
-        if query.is_empty() {
-            return Vec::new();
-        }
-        let mut previews = Vec::new();
-        for root in &self.roots {
-            for entry in &root.index {
-                let path = root.path.join(&entry.relative_path);
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                let count = content.matches(query).count();
-                if count > 0 {
-                    let _ = replacement; // preview only
-                    previews.push(ReplacePreview {
-                        root_id: root.id.clone(),
-                        relative_path: entry.relative_path.clone(),
-                        replacements: count,
-                    });
-                }
-            }
-        }
-        previews
+    /// `(root path, indexed relative paths)` pairs the read workers consume.
+    pub fn read_snapshot(&self) -> ide_workspace_scan::WorkspaceReadSnapshot {
+        ide_workspace_scan::read_snapshot(&self.roots)
     }
 
+    /// Root ids in index order; pairs with [`Self::read_snapshot`].
+    pub fn root_ids(&self) -> Vec<String> {
+        self.roots.iter().map(|root| root.id.clone()).collect()
+    }
+
+    /// Blocking replacement preview; see [`Self::search`] for the worker path.
+    pub fn preview_replace(&self, query: &str, _replacement: &str) -> Vec<ReplacePreview> {
+        ide_workspace_scan::preview_replace_snapshot(&self.read_snapshot(), &self.root_ids(), query)
+    }
+
+    /// Blocking replace-in-files; the UI path is
+    /// [`ide_workspace_scan::spawn_apply_replace_task`] (#579).
     pub fn apply_replace(&mut self, query: &str, replacement: &str) -> Result<usize, String> {
         if !self.is_trusted() {
             return Err("trust the workspace before replace-in-files".to_owned());
@@ -399,23 +389,13 @@ impl IdeWorkspaceState {
         if query.is_empty() {
             return Err("empty search".to_owned());
         }
-        let mut total = 0usize;
-        for root in &self.roots {
-            for entry in &root.index {
-                let path = root.path.join(&entry.relative_path);
-                let Ok(content) = std::fs::read_to_string(&path) else {
-                    continue;
-                };
-                if !content.contains(query) {
-                    continue;
-                }
-                let updated = content.replace(query, replacement);
-                let count = content.matches(query).count();
-                std::fs::write(&path, updated).map_err(|e| e.to_string())?;
-                total += count;
-            }
-        }
-        self.refresh()?;
+        let total = ide_workspace_scan::apply_replace_snapshot(&self.read_snapshot(), query, replacement)?;
+        // #579: replace-in-files only rewrites file contents, so the file *set*
+        // is unchanged and the tree/index stay valid — a full `refresh()` here
+        // re-walked every root synchronously on each replace. Drop the cached
+        // dependency edges instead; callers that need a fresh tree ask for it.
+        self.bump_index_epoch();
+        self.last_error = None;
         Ok(total)
     }
 
@@ -463,37 +443,6 @@ impl IdeWorkspaceState {
         entries
     }
 
-    pub fn run_task(&mut self, command_line: &str) -> Result<TaskRunResult, String> {
-        if !self.is_trusted() {
-            return Err("trust the workspace before running tasks/terminal commands".to_owned());
-        }
-        let cwd = self
-            .primary_path()
-            .ok_or_else(|| "open a workspace folder first".to_owned())?
-            .to_path_buf();
-        let started = Instant::now();
-        #[cfg(target_os = "windows")]
-        let output = Command::new("cmd")
-            .args(["/C", command_line])
-            .current_dir(&cwd)
-            .output();
-        #[cfg(not(target_os = "windows"))]
-        let output = Command::new("sh")
-            .args(["-lc", command_line])
-            .current_dir(&cwd)
-            .output();
-        let output = output.map_err(|e| e.to_string())?;
-        let result = TaskRunResult {
-            command: command_line.to_owned(),
-            exit_code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            duration_ms: started.elapsed().as_millis() as u64,
-        };
-        self.last_task = Some(result.clone());
-        Ok(result)
-    }
-
     pub fn export_schema_snapshot(&self, schema_sql: &str) -> Result<PathBuf, String> {
         let root = self
             .primary_path()
@@ -537,7 +486,29 @@ impl IdeWorkspaceState {
         self.last_drift_check = Some(Instant::now());
     }
 
-    pub fn dependency_edges(&self) -> Vec<DependencyEdge> {
+    /// Dependency edges for the Graph tab (#578).
+    ///
+    /// Reading every indexed `.sql` file is expensive, and the view used to do
+    /// it once per frame. The result is cached and recomputed only when
+    /// [`Self::index_epoch`] moves, i.e. after a rescan or a root mutation.
+    pub fn dependency_edges(&mut self) -> &[DependencyEdge] {
+        if self
+            .dependency_edge_cache
+            .as_ref()
+            .is_none_or(|cache| cache.index_epoch != self.index_epoch)
+        {
+            let edges = self.edges();
+            self.dependency_edge_cache = Some(DependencyEdgeCache {
+                index_epoch: self.index_epoch,
+                edges,
+            });
+        }
+        self.dependency_edge_cache
+            .as_ref()
+            .map_or(&[], |cache| cache.edges.as_slice())
+    }
+
+    fn edges(&self) -> Vec<DependencyEdge> {
         let mut edges = Vec::new();
         for root in &self.roots {
             for entry in root.index.iter().filter(|entry| entry.is_sql) {
@@ -554,6 +525,74 @@ impl IdeWorkspaceState {
             }
         }
         edges
+    }
+
+    /// Drop cached derived data after files changed on disk (#578/#579).
+    pub fn invalidate_dependency_edges(&mut self) {
+        self.dependency_edge_cache = None;
+    }
+
+    /// Monotonic counter bumped whenever the file index changes.
+    pub fn index_epoch(&self) -> u64 {
+        self.index_epoch
+    }
+
+    fn bump_index_epoch(&mut self) {
+        self.index_epoch = self.index_epoch.wrapping_add(1);
+        self.dependency_edge_cache = None;
+    }
+
+    /// Patch the in-memory tree/index for one path instead of rescanning the
+    /// whole root (#579).
+    ///
+    /// `create_file` / `rename_path` / `delete_path` used to end in
+    /// `refresh()` → a synchronous recursive `read_dir` of every root. The
+    /// index only tracks `(relative_path, is_sql)`, so a single-path mutation
+    /// can be applied in place. Directory changes still fall back to a rescan.
+    fn sync_path(&mut self, root_id: &str, absolute: &Path) -> Result<(), String> {
+        let Some(root) = self.roots.iter().find(|root| root.id == root_id) else {
+            return self.refresh();
+        };
+        let Ok(relative) = absolute.strip_prefix(&root.path) else {
+            return self.refresh();
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if absolute.is_dir() {
+            return self.refresh();
+        }
+        if !absolute.exists() {
+            return self.forget_path(root_id, &relative);
+        }
+        let is_sql = relative.to_ascii_lowercase().ends_with(".sql");
+        let Some(root) = self.roots.iter_mut().find(|root| root.id == root_id) else {
+            return self.refresh();
+        };
+        if root.index.iter().any(|entry| entry.relative_path == relative) {
+            return Ok(());
+        }
+        root.index.push(WorkspaceIndexEntry {
+            root_id: root_id.to_owned(),
+            relative_path: relative.clone(),
+            is_sql,
+        });
+        let root_path = root.path.clone();
+        insert_node(&mut root.tree, &root_path, &relative);
+        self.bump_index_epoch();
+        Ok(())
+    }
+
+    /// Remove `relative` (and anything below it) from the tree and index.
+    fn forget_path(&mut self, root_id: &str, relative: &str) -> Result<(), String> {
+        let Some(root) = self.roots.iter_mut().find(|root| root.id == root_id) else {
+            return self.refresh();
+        };
+        remove_node(&mut root.tree, relative);
+        let prefix = format!("{relative}/");
+        root.index.retain(|entry| {
+            entry.relative_path != relative && !entry.relative_path.starts_with(&prefix)
+        });
+        self.bump_index_epoch();
+        Ok(())
     }
 
     pub fn create_sandbox_sqlite_copy(&self, source_db: &Path) -> Result<PathBuf, String> {
@@ -652,6 +691,63 @@ impl IdeWorkspaceState {
         self.refresh()?;
         Ok(())
     }
+}
+
+/// Insert `relative` into the cached tree without re-walking the disk (#579).
+///
+/// Directories along the way are reused when already present, so the tree keeps
+/// the same shape a rescan would produce.
+fn insert_node(tree: &mut Vec<WorkspaceFileNode>, root: &Path, relative: &str) {
+    let parts: Vec<&str> = relative.split('/').filter(|part| !part.is_empty()).collect();
+    insert_parts(tree, root, "", &parts);
+}
+
+fn insert_parts(
+    nodes: &mut Vec<WorkspaceFileNode>,
+    root: &Path,
+    prefix: &str,
+    parts: &[&str],
+) {
+    let Some((name, rest)) = parts.split_first() else {
+        return;
+    };
+    let relative = if prefix.is_empty() {
+        (*name).to_owned()
+    } else {
+        format!("{prefix}/{name}")
+    };
+    let is_dir = !rest.is_empty();
+    if let Some(node) = nodes
+        .iter_mut()
+        .find(|node| node.relative_path == relative && node.is_dir == is_dir)
+    {
+        if is_dir {
+            insert_parts(&mut node.children, root, &relative, rest);
+        }
+        return;
+    }
+    let mut node = WorkspaceFileNode {
+        name: (*name).to_owned(),
+        absolute_path: root.join(&relative),
+        relative_path: relative.clone(),
+        is_dir,
+        children: Vec::new(),
+    };
+    if is_dir {
+        insert_parts(&mut node.children, root, &relative, rest);
+    }
+    nodes.push(node);
+}
+
+/// Drop `relative` (and everything below it) from the cached tree (#579).
+fn remove_node(nodes: &mut Vec<WorkspaceFileNode>, relative: &str) {
+    let prefix = format!("{relative}/");
+    for node in nodes.iter_mut().filter(|node| node.is_dir) {
+        remove_node(&mut node.children, relative);
+    }
+    nodes.retain(|node| {
+        node.relative_path != relative && !node.relative_path.starts_with(&prefix)
+    });
 }
 
 fn relative_path_is_root(path: &Path) -> bool {

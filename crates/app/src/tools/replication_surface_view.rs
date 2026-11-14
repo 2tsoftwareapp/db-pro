@@ -3,6 +3,18 @@ use super::super::replication_state::ReplicationState;
 use super::super::*;
 use crate::components::dialog::Dialog;
 
+/// Maximum rows painted per replication list (#569/#583).
+const REPLICATION_ROW_CAP: usize = 40;
+
+/// "Showing 40 of 213" hint above a truncated list (#569).
+fn draw_shown_total(ui: &mut egui::Ui, theme: DbProTheme, cap_then_total: (usize, usize)) {
+    ui.label(
+        RichText::new(format_shown_total(cap_then_total.0, cap_then_total.1))
+            .small()
+            .color(theme.text_muted),
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ReplicationSurfaceAction {
     Refresh,
@@ -83,13 +95,18 @@ impl ReplicationSurfaceContext<'_> {
         publications: &[db_pro_core::domain::replication::PublicationInfo],
         actions: &mut Vec<ReplicationSurfaceAction>,
     ) {
-        for publication in publications.iter().take(40) {
+        if publications.len() > REPLICATION_ROW_CAP {
+            draw_shown_total(ui, self.theme, (REPLICATION_ROW_CAP, publications.len()));
+        }
+        for publication in publications.iter().take(REPLICATION_ROW_CAP) {
             let name = publication.name.clone();
             Card::new(self.theme).frame().show(ui, |ui| {
                 ui.label(
                     RichText::new(format!(
-                        "publication {} · all_tables={} · owner={:?}",
-                        publication.name, publication.all_tables, publication.owner
+                        "publication {} · all_tables={} · owner={}",
+                        publication.name,
+                        publication.all_tables,
+                        fmt_opt(publication.owner.as_deref())
                     ))
                     .strong()
                     .monospace(),
@@ -131,13 +148,15 @@ impl ReplicationSurfaceContext<'_> {
         subscriptions: &[db_pro_core::domain::replication::SubscriptionInfo],
         actions: &mut Vec<ReplicationSurfaceAction>,
     ) {
-        for subscription in subscriptions.iter().take(40) {
+        for subscription in subscriptions.iter().take(REPLICATION_ROW_CAP) {
             let name = subscription.name.clone();
             Card::new(self.theme).frame().show(ui, |ui| {
                 ui.label(
                     RichText::new(format!(
-                        "subscription {} · enabled={} · slot={:?}",
-                        subscription.name, subscription.enabled, subscription.slot_name
+                        "subscription {} · enabled={} · slot={}",
+                        subscription.name,
+                        subscription.enabled,
+                        fmt_opt(subscription.slot_name.as_deref())
                     ))
                     .strong()
                     .monospace(),
@@ -176,11 +195,17 @@ impl ReplicationSurfaceContext<'_> {
     }
 
     fn draw_slots(&self, ui: &mut egui::Ui, slots: &[db_pro_core::domain::replication::ReplicationSlotInfo]) {
-        for slot in slots.iter().take(40) {
+        if slots.len() > REPLICATION_ROW_CAP {
+            draw_shown_total(ui, self.theme, (REPLICATION_ROW_CAP, slots.len()));
+        }
+        for slot in slots.iter().take(REPLICATION_ROW_CAP) {
             ui.label(
                 RichText::new(format!(
-                    "slot {} · type={:?} · active={} · restart={:?}",
-                    slot.slot_name, slot.slot_type, slot.active, slot.restart_lsn
+                    "slot {} · type={} · active={} · restart={}",
+                    slot.slot_name,
+                    fmt_opt(slot.slot_type.as_deref()),
+                    slot.active,
+                    fmt_opt(slot.restart_lsn.as_deref())
                 ))
                 .small()
                 .monospace()

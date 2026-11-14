@@ -45,7 +45,8 @@ async fn setup() -> (Arc<PostgresConnector>, ConnectionHandle) {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let connector = Arc::new(PostgresConnector::new());
     let handle = connector.connect(&config, password).await.expect("PG connect");
     (connector, handle)

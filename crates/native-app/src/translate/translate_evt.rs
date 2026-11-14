@@ -484,6 +484,7 @@ fn translate_connections_loaded(
                 driver: connection.driver,
                 ssl_mode: ui_ssl_mode(connection.ssl_mode),
                 readonly: connection.readonly,
+                create_if_missing: false,
                 tags: connection.tags,
                 group: connection.group,
                 favorite: connection.favorite,

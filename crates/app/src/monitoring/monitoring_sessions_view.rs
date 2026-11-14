@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Idle-in-transaction rows painted per frame (#569).
+const IDLE_XACT_CAP: usize = 20;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum MonitoringSessionsAction {
     OpenSql(String),
@@ -48,14 +51,18 @@ impl MonitoringSessionsContext<'_> {
         }
         section_label(ui, "IDLE IN TRANSACTION", self.theme);
         ui.add_space(SPACE_SM);
-        for session in idle_xacts.into_iter().take(20) {
+        // #569: idle-in-transaction sessions are a lock risk; never truncate silently.
+        if let Some(hint) = shown_total_hint(IDLE_XACT_CAP, idle_xacts.len()) {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
+        for session in idle_xacts.into_iter().take(IDLE_XACT_CAP) {
             ui.label(
                 RichText::new(format!(
-                    "pid {} · xact_age={:?} ms · backend_age={:?} ms · {}",
+                    "pid {} · xact_age={} · backend_age={} · {}",
                     session.backend_id,
-                    session.xact_age_ms,
-                    session.backend_age_ms,
-                    session.username.as_deref().unwrap_or("?")
+                    fmt_opt_duration_millis(session.xact_age_ms),
+                    fmt_opt_duration_millis(session.backend_age_ms),
+                    fmt_opt(session.username.as_deref())
                 ))
                 .small()
                 .color(self.theme.warning),

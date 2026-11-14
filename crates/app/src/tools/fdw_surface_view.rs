@@ -5,6 +5,13 @@
 use super::super::fdw_state::FdwState;
 use super::super::*;
 
+/// Row caps for the FDW inventory lists (#569/#583).
+const FDW_WRAPPER_CAP: usize = 20;
+const FDW_SERVER_CAP: usize = 30;
+const FDW_MAPPING_CAP: usize = 30;
+const FDW_TABLE_CAP: usize = 40;
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FdwSurfaceAction {
     Refresh,
@@ -86,17 +93,30 @@ impl FdwSurfaceContext<'_> {
         if let Some(hint) = &inventory.extension_hint {
             ui.colored_label(self.theme.warning, hint);
         }
-        for wrapper in inventory.wrappers.iter().take(20) {
+        let shown_hint = shown_total_hint(
+            FDW_WRAPPER_CAP,
+            inventory.wrappers.len(),
+            FDW_SERVER_CAP,
+            inventory.servers.len(),
+        );
+        if let Some(hint) = shown_hint {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
+        for wrapper in inventory.wrappers.iter().take(FDW_WRAPPER_CAP) {
             ui.label(
-                RichText::new(format!("wrapper {} · handler={:?}", wrapper.name, wrapper.handler))
+                RichText::new(format!(
+                    "wrapper {} · handler={}",
+                    wrapper.name,
+                    fmt_opt(wrapper.handler.as_deref())
+                ))
                     .small()
                     .monospace(),
             );
         }
-        for server in inventory.servers.iter().take(30) {
+        for server in inventory.servers.iter().take(FDW_SERVER_CAP) {
             self.draw_server(ui, server, actions);
         }
-        for mapping in inventory.user_mappings.iter().take(30) {
+        for mapping in inventory.user_mappings.iter().take(FDW_MAPPING_CAP) {
             let options = mapping
                 .options
                 .iter()
@@ -113,7 +133,7 @@ impl FdwSurfaceContext<'_> {
                 .color(self.theme.text_secondary),
             );
         }
-        for table in inventory.foreign_tables.iter().take(40) {
+        for table in inventory.foreign_tables.iter().take(FDW_TABLE_CAP) {
             ui.label(
                 RichText::new(format!(
                     "foreign {}.{} → {}",
@@ -334,4 +354,21 @@ impl FdwSurfaceContext<'_> {
             actions.push(FdwSurfaceAction::CancelDrop);
         }
     }
+}
+
+/// Truncation hint for the two capped FDW lists (#569).
+fn shown_total_hint(
+    wrapper_cap: usize,
+    wrappers: usize,
+    server_cap: usize,
+    servers: usize,
+) -> Option<String> {
+    if wrappers <= wrapper_cap && servers <= server_cap {
+        return None;
+    }
+    Some(format!(
+        "{} · {}",
+        format_shown_total(wrappers.min(wrapper_cap), wrappers),
+        format_shown_total(servers.min(server_cap), servers)
+    ))
 }

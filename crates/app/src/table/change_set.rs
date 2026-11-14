@@ -4,6 +4,11 @@ use super::UiCell;
 pub(crate) struct RowIdentity {
     pub(crate) original_pk_columns: Vec<String>,
     pub(crate) original_pk_values: Vec<UiCell>,
+    /// Column types parallel to `original_pk_columns` (#587).
+    ///
+    /// Without them the translator sniffed PK cells by content, so a TEXT
+    /// primary key holding a UUID was sent as a UUID and never matched a row.
+    pub(crate) original_pk_data_types: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +30,8 @@ pub(crate) enum StagedChange {
         local_id: u64,
         columns: Vec<String>,
         values: Vec<UiCell>,
+        /// Column types parallel to `columns` (#587).
+        data_types: Vec<String>,
     },
 }
 
@@ -205,6 +212,16 @@ impl ChangeSet {
     }
 
     pub fn stage_insert(&mut self, columns: Vec<String>, values: Vec<UiCell>) -> u64 {
+        self.stage_insert_typed(columns, Vec::new(), values)
+    }
+
+    /// Stage an insert with the column types the grid knows about (#587).
+    pub fn stage_insert_typed(
+        &mut self,
+        columns: Vec<String>,
+        data_types: Vec<String>,
+        values: Vec<UiCell>,
+    ) -> u64 {
         let local_id = self
             .entries
             .iter()
@@ -219,6 +236,7 @@ impl ChangeSet {
             local_id,
             columns,
             values,
+            data_types,
         });
         local_id
     }

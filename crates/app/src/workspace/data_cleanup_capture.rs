@@ -33,6 +33,7 @@ impl DbProApp {
             driver: "postgresql".into(),
             ssl_mode: crate::UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,

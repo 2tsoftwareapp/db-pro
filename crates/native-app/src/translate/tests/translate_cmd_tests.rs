@@ -94,3 +94,57 @@ fn disabled_network_tunnel_remains_direct() {
         assert!(config.validate().is_ok());
     }
 }
+
+/// #587: INSERT and DELETE values must use their declared column types instead
+/// of content sniffing, so a TEXT key holding a UUID stays text.
+#[test]
+fn table_mutations_type_pk_and_insert_values_587() {
+    use db_pro_core::application::TableDataMutation;
+    use db_pro_core::domain::query::CellValue;
+
+    let delete = map_table_mutation(UiTableMutation::Delete {
+        pk_columns: vec!["external_id".to_owned()],
+        pk_values: vec![UiCell::Text("2f1c0a52-3d8f-4c1a-9a2f-2f9d0c7b1e11".to_owned())],
+        pk_data_types: vec!["text".to_owned()],
+    })
+    .expect("delete maps");
+    let TableDataMutation::Delete { pk_values, .. } = delete else {
+        panic!("expected delete");
+    };
+    assert_eq!(
+        pk_values[0],
+        CellValue::Text("2f1c0a52-3d8f-4c1a-9a2f-2f9d0c7b1e11".to_owned()),
+        "text PK must not be sniffed into a UUID"
+    );
+
+    let insert = map_table_mutation(UiTableMutation::Insert {
+        columns: vec!["amount".to_owned(), "note".to_owned()],
+        data_types: vec!["numeric".to_owned(), "text".to_owned()],
+        values: vec![
+            UiCell::Number("1234567890.123456789".to_owned()),
+            UiCell::Text("kept as text".to_owned()),
+        ],
+    })
+    .expect("insert maps");
+    let TableDataMutation::Insert { values, .. } = insert else {
+        panic!("expected insert");
+    };
+    assert_eq!(
+        values[0],
+        CellValue::Decimal("1234567890.123456789".to_owned()),
+        "numeric keeps full precision"
+    );
+    assert_eq!(values[1], CellValue::Text("kept as text".to_owned()));
+
+    // A caller without types keeps the historical content-based inference.
+    let untyped = map_table_mutation(UiTableMutation::Insert {
+        columns: vec!["copied".to_owned()],
+        data_types: Vec::new(),
+        values: vec![UiCell::Number("42".to_owned())],
+    })
+    .expect("insert maps");
+    let TableDataMutation::Insert { values, .. } = untyped else {
+        panic!("expected insert");
+    };
+    assert_eq!(values[0], CellValue::Int64(42));
+}

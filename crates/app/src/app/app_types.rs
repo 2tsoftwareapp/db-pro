@@ -321,15 +321,61 @@ pub(crate) fn agent_panel_contains_pointer(ctx: &egui::Context, pos: egui::Pos2)
     ctx.data(|d| d.get_temp::<egui::Rect>(agent_panel_rect_key()))
         .is_some_and(|rect| rect.contains(pos))
 }
+/// Absolute floor for the output dock — four result rows plus the tab strip.
 pub(crate) const OUTPUT_MIN_HEIGHT: f32 = 120.0;
+/// Upper bound when the window is tall enough; see [`output_dock_max_height`].
 pub(crate) const OUTPUT_MAX_HEIGHT: f32 = 420.0;
+/// Share of the pane the dock may claim when the user drags it open (#576).
+pub(crate) const OUTPUT_MAX_FRACTION: f32 = 0.72;
+/// Editor floor the dock yields to on a short window (#576).
+pub(crate) const EDITOR_MIN_HEIGHT: f32 = 120.0;
+/// Hard floor for the dock, below which it stops yielding to the editor.
+pub(crate) const OUTPUT_ABSOLUTE_MIN_HEIGHT: f32 = 48.0;
+
+/// Height ceiling for the output dock given the space actually available.
+///
+/// #576: the limit was a flat 420 px, so a 4K window gave the same ~13 result
+/// rows as a 768 px laptop, while a short window could be overdrawn because
+/// `min_height` (120) + editor + status exceeded the available height. The floor
+/// now yields to the pane: `min` is never larger than the space left for the
+/// editor.
+pub(crate) fn output_dock_max_height(available_height: f32) -> f32 {
+    let proportional = (available_height * OUTPUT_MAX_FRACTION).max(OUTPUT_MIN_HEIGHT);
+    proportional.max(OUTPUT_MIN_HEIGHT)
+}
+
+/// Floor for the output dock given the space actually available.
+///
+/// On a very short pane the dock shrinks below [`OUTPUT_MIN_HEIGHT`] rather than
+/// pushing the editor past the bottom edge.
+pub(crate) fn output_dock_min_height(available_height: f32) -> f32 {
+    (available_height - EDITOR_MIN_HEIGHT).clamp(OUTPUT_ABSOLUTE_MIN_HEIGHT, OUTPUT_MIN_HEIGHT)
+}
 pub(crate) const TABLE_PAGE_SIZE: u64 = 100;
 pub(crate) const GRID_ROW_NUMBER_WIDTH: f32 = 48.0;
+/// Height of the header row (one grid row) — the body starts below it.
+pub(crate) const GRID_HEADER_HEIGHT: f32 = 28.0;
+/// Height of one body row; virtualization and hit-testing share it.
+pub(crate) const GRID_ROW_HEIGHT: f32 = 28.0;
 pub use crate::diagram::{ErGraph, ErSpatialIndex};
 
-pub(crate) const EXPLORER_MAX_TABLES: usize = 100;
+/// Safety valve for pathological schemas, not a product limit.
+///
+/// #572: the explorer stopped at 100 tables per schema and told the user to
+/// "refine filter", so a 300-table ERP database was unreachable except by
+/// typing a name. The list is culled per viewport while painting, so the cap
+/// only needs to bound the `Vec<String>` built per keystroke.
+pub(crate) const EXPLORER_MAX_TABLES: usize = 20_000;
 /// Row height used by the Codex navigator for viewport culling.
 pub(crate) const EXPLORER_ROW_HEIGHT: f32 = 26.0;
+
+/// True when a row of `height` starting at `row_top` cannot intersect `clip`.
+///
+/// Shared by the Tables folder and the Views/Functions/Triggers folders so
+/// viewport culling uses one culling rule (#583).
+pub(crate) fn explorer_row_is_offscreen(row_top: f32, height: f32, clip: egui::Rect) -> bool {
+    row_top + height < clip.top() || row_top > clip.bottom()
+}
 
 /// Schemas the explorer should show — and the destructive DROP SCHEMA guard's
 /// system-schema boundary (#348/#402). `driver` is the provider label
@@ -342,13 +388,20 @@ pub(crate) fn is_user_visible_schema(driver: &str, name: &str) -> bool {
         || lower == "pg_toast"
         || lower.starts_with("pg_temp")
         || lower.starts_with("pg_toast_temp");
-    let mysql_system = lower == "mysql" || lower == "performance_schema" || lower == "sys" || lower == "information_schema";
+    let mysql_system = lower == "mysql"
+        || lower == "performance_schema"
+        || lower == "sys"
+        || lower == "information_schema";
     // `db_*` schemas are fixed SQL Server roles, not user schema space.
-    let sqlserver_system =
-        lower == "sys" || lower == "information_schema" || lower == "guest" || lower.starts_with("db_");
+    let sqlserver_system = lower == "sys"
+        || lower == "information_schema"
+        || lower == "guest"
+        || lower.starts_with("db_");
     match driver.to_ascii_lowercase().as_str() {
         d if d.contains("mysql") => !mysql_system,
-        d if d.contains("sql server") || d.contains("sqlserver") || d.contains("mssql") => !sqlserver_system,
+        d if d.contains("sql server") || d.contains("sqlserver") || d.contains("mssql") => {
+            !sqlserver_system
+        }
         // SQLite has no schema drops; `main`/`temp` are the user's data space.
         d if d.contains("sqlite") => true,
         d if d.contains("postgres") || d.is_empty() => !postgres_system,
@@ -554,3 +607,7 @@ pub(crate) enum SchemaObjectView {
     Definition,
     Data,
 }
+
+#[cfg(test)]
+#[path = "tests/layout_clamp_tests.rs"]
+mod layout_clamp_tests;

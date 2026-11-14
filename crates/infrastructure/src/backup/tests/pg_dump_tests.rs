@@ -43,7 +43,8 @@ fn restore_argv_has_no_transaction_boundary_and_is_documented_as_such() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let plain = RestoreOptions {
         connection_id: "c1".to_owned(),
         input_path: "/tmp/dump.sql".to_owned(),
@@ -155,7 +156,8 @@ async fn pgpass_file_is_owner_only_and_removed_on_drop() -> Result<(), Box<dyn s
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
 
     let path = {
         let guard = PgPassFile::create(&config, "p\\a:ss").await?;

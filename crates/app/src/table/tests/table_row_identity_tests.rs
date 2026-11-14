@@ -95,6 +95,7 @@ fn people_app(indexes: Vec<UiTableIndex>) -> DbProApp {
                     driver: "PostgreSQL".to_owned(),
                     ssl_mode: UiSslMode::Disable,
                     readonly: false,
+                    create_if_missing: false,
                     tags: vec![],
                     group: None,
                     favorite: false,
@@ -155,7 +156,11 @@ fn where_sql(plan: &TableApplyPlan) -> (Option<String>, Option<String>) {
                 .expect("update sql");
                 update_sql = Some(sql);
             }
-            UiTableMutation::Delete { pk_columns, pk_values } => {
+            UiTableMutation::Delete {
+                pk_columns,
+                pk_values,
+                ..
+            } => {
                 let (sql, _) = build_delete(
                     &dialect,
                     "public",

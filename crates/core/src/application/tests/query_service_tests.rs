@@ -61,7 +61,8 @@ fn mock_connections_full_access() -> MockConnectionRepository {
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        }))
+            create_if_missing: false,
+}))
     });
     repo
 }
@@ -90,7 +91,8 @@ fn mock_connections_read_only() -> MockConnectionRepository {
             favorite: false,
             environment: Default::default(),
             readonly: true,
-        }))
+            create_if_missing: false,
+}))
     });
     repo
 }
@@ -107,7 +109,7 @@ async fn execute_success() {
     connector.expect_query().returning(|_, _, _| Ok(test_result()));
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -165,7 +167,7 @@ async fn execute_ddl_invalidates_schema_cache() {
     });
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let mut cache = MockIntrospectionCache::new();
     cache
@@ -242,7 +244,7 @@ async fn execute_trailing_semicolon_ok() {
     connector.expect_query().returning(|_, _, _| Ok(test_result()));
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -267,7 +269,7 @@ async fn execute_semicolon_in_string_ok() {
     connector.expect_query().returning(|_, _, _| Ok(test_result()));
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -294,7 +296,7 @@ async fn execute_history_save_failure_non_fatal() {
     let mut history = MockQueryHistoryRepository::new();
     history
         .expect_save()
-        .returning(|_, _, _, _, _| Err(DbError::Internal("disk full".into())));
+        .returning(|_, _, _, _, _, _| Err(DbError::Internal("disk full".into())));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -443,7 +445,7 @@ async fn execute_multi_routes_select_then_update() {
 
     // cc-scan:allow DUPLICATE_BLOCK — coincidental boilerplate, not a real clone
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -574,7 +576,7 @@ async fn execute_multi_does_not_apply_the_batch_rule_to_a_single_statement() {
     connector.expect_execute_transaction().never();
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -620,7 +622,7 @@ async fn execute_multi_routes_mutating_cte_through_transaction_while_preserving_
         });
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -655,7 +657,7 @@ async fn execute_multi_with_update_routes_to_execute() {
     connector.expect_execute().returning(|_, _, _| Ok(5));
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -693,7 +695,7 @@ async fn execute_multi_routes_update_returning_through_query() {
         .returning(|_, _, _| Ok(test_result()));
 
     let mut history = MockQueryHistoryRepository::new();
-    history.expect_save().returning(|_, _, _, _, _| Ok(()));
+    history.expect_save().returning(|_, _, _, _, _, _| Ok(()));
 
     let svc = QueryService::new(
         Box::new(connector),
@@ -858,4 +860,146 @@ fn boundary_failure_with_open_transaction_is_not_reported_as_unknown() {
     );
     assert!(message.contains("the open transaction is still held"), "{message}");
     assert!(!message.contains("unknown"), "{message}");
+}
+
+// --- #589: Run-all routes CTE / VALUES / PRAGMA statements to query() --------
+
+#[test]
+fn classify_recursive_cte_is_read() {
+    let sql = "WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT n FROM t";
+    assert!(matches!(
+        classify_statement(sql, DriverType::Postgres),
+        StatementClass::Read
+    ));
+}
+
+#[test]
+fn classify_cte_with_column_list_is_read() {
+    for sql in [
+        "WITH cte (id) AS (SELECT 1) SELECT * FROM cte",
+        "WITH t(n) AS (SELECT 1), u AS (SELECT 2) SELECT * FROM t JOIN u ON true",
+        "WITH a AS NOT MATERIALIZED (SELECT 1) SELECT * FROM a",
+        "WITH \"a(b\" AS (SELECT 1) SELECT 1",
+    ] {
+        assert!(
+            matches!(classify_statement(sql, DriverType::Postgres), StatementClass::Read),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn classify_values_and_pragma_are_reads() {
+    assert!(matches!(
+        classify_statement("VALUES (1), (2)", DriverType::Postgres),
+        StatementClass::Read
+    ));
+    assert!(matches!(
+        classify_statement("PRAGMA table_info(users)", DriverType::SQLite),
+        StatementClass::Read
+    ));
+    // A pragma that assigns is a write, and PostgreSQL does not know PRAGMA at all.
+    assert!(matches!(
+        classify_statement("PRAGMA journal_mode = wal", DriverType::SQLite),
+        StatementClass::Write
+    ));
+    assert!(matches!(
+        classify_statement("PRAGMA table_info(users)", DriverType::Postgres),
+        StatementClass::Write
+    ));
+}
+
+#[test]
+fn effective_keyword_resolves_the_cte_list_not_its_first_parenthesis() {
+    assert_eq!(
+        effective_statement_keyword("WITH RECURSIVE t(n) AS (SELECT 1) SELECT n FROM t", DriverType::Postgres)
+            .as_deref(),
+        Some("SELECT")
+    );
+    assert_eq!(
+        effective_statement_keyword("-- lead\nWITH d AS (SELECT 1) UPDATE t SET x = 1", DriverType::Postgres).as_deref(),
+        Some("UPDATE")
+    );
+    assert_eq!(
+        effective_statement_keyword("SELECT 1", DriverType::Postgres).as_deref(),
+        Some("SELECT")
+    );
+}
+
+/// #600: a failed statement must still land in history, marked failed, with its
+/// error text — that is exactly when the SQL is worth keeping.
+#[tokio::test]
+async fn failed_statement_is_recorded_in_history_600() {
+    let conn_id = ConnectionId::new();
+    let registry = Arc::new(ConnectionRegistry::new());
+    registry.register(conn_id, ConnectionHandle(1));
+
+    let mut connector = MockDbConnector::new();
+    connector
+        .expect_query()
+        .returning(|_, _, _| Err(DbError::QueryFailed("relation \"nope\" does not exist".into())));
+
+    let mut history = MockQueryHistoryRepository::new();
+    history
+        .expect_save()
+        .withf(|_, sql, result, _, _, error| {
+            sql.contains("nope")
+                && result.is_some()
+                && result.is_some_and(|result| result.row_count == 0)
+                && error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("does not exist"))
+        })
+        .times(1)
+        .returning(|_, _, _, _, _, _| Ok(()));
+
+    let svc = QueryService::new(
+        Box::new(connector),
+        Box::new(history),
+        Box::new(MockSavedQueryRepository::new()),
+        Box::new(MockRunConfigRepository::new()),
+        Arc::clone(&registry),
+        Box::new(mock_connections_full_access()),
+    );
+
+    let result = svc.execute(&conn_id, "SELECT * FROM nope", &[], None, None).await;
+    assert!(result.is_err());
+}
+
+/// #600: history never stores a credential, even inside the failure text.
+#[tokio::test]
+async fn failed_statement_history_redacts_credentials_600() {
+    let conn_id = ConnectionId::new();
+    let registry = Arc::new(ConnectionRegistry::new());
+    registry.register(conn_id, ConnectionHandle(1));
+
+    let mut connector = MockDbConnector::new();
+    connector.expect_query().returning(|_, _, _| {
+        Err(DbError::QueryFailed(
+            "server rejected conninfo host=db password=supersecret".into(),
+        ))
+    });
+
+    let mut history = MockQueryHistoryRepository::new();
+    history
+        .expect_save()
+        .withf(|_, sql, _, _, _, error| {
+            !sql.contains("supersecret") && !error.as_deref().unwrap_or("").contains("supersecret")
+        })
+        .times(1)
+        .returning(|_, _, _, _, _, _| Ok(()));
+
+    let svc = QueryService::new(
+        Box::new(connector),
+        Box::new(history),
+        Box::new(MockSavedQueryRepository::new()),
+        Box::new(MockRunConfigRepository::new()),
+        Arc::clone(&registry),
+        Box::new(mock_connections_full_access()),
+    );
+
+    let result = svc
+        .execute(&conn_id, "ALTER ROLE app PASSWORD 'supersecret'", &[], None, None)
+        .await;
+    assert!(result.is_err());
 }

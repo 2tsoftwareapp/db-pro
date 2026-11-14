@@ -82,7 +82,7 @@ fn sqlite_draft_drops_postgres_only_credentials() {
         ssh_tunnel_enabled: true,
         ssh_host: "bastion".to_owned(),
         ..Default::default()
-    };
+};
 
     let (config, password) = draft_to_domain(draft).expect("valid SQLite draft");
 
