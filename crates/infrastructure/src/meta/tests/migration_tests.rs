@@ -185,3 +185,67 @@ async fn unsupported_future_schema_version_is_rejected() {
     let error = migrate(&handle).await.expect_err("future version must be rejected");
     assert!(error.to_string().contains("newer than supported version"));
 }
+
+/// #600: v3/v4 add `success`/`error_message` to a v2-shaped table, and re-running
+/// the migration must not fail on the columns it already added.
+#[tokio::test]
+async fn migration_adds_history_status_columns_idempotently_600() {
+    use crate::sqlite::actor::SqliteActor;
+
+    let handle = SqliteActor::spawn(":memory:").unwrap();
+    // v2 shape: the base table without the new columns.
+    handle
+        .execute_statement(
+            "CREATE TABLE query_history (
+                id TEXT PRIMARY KEY,
+                connection_id TEXT NOT NULL,
+                sql TEXT NOT NULL,
+                executed_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL,
+                row_count INTEGER NOT NULL,
+                database TEXT,
+                schema TEXT
+            )"
+            .into(),
+        )
+        .await
+        .unwrap();
+    // Pretend v2 was applied, so only v3/v4 run.
+    handle
+        .execute_statement(
+            "CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, description TEXT NOT NULL
+            )"
+            .into(),
+        )
+        .await
+        .unwrap();
+    for version in 1..=2 {
+        handle
+            .execute_param(
+                "INSERT INTO schema_version (version, applied_at, description) VALUES (?, ?, ?)".into(),
+                vec![
+                    db_pro_core::domain::query::QueryParam::Int64(version),
+                    db_pro_core::domain::query::QueryParam::Text("2024-01-01T00:00:00Z".into()),
+                    db_pro_core::domain::query::QueryParam::Text("seed".into()),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(migrate(&handle).await.unwrap(), LATEST_VERSION);
+    // A second run is a no-op rather than a "duplicate column" error.
+    assert_eq!(migrate(&handle).await.unwrap(), LATEST_VERSION);
+
+    let columns = handle
+        .raw_query("PRAGMA table_info(query_history)".into(), vec![])
+        .await
+        .unwrap();
+    let names: Vec<&str> = columns
+        .iter()
+        .filter_map(|column| column.get(1).map(String::as_str))
+        .collect();
+    assert!(names.contains(&"success"), "columns: {names:?}");
+    assert!(names.contains(&"error_message"), "columns: {names:?}");
+}
