@@ -192,60 +192,63 @@ fn scan_backward(text: &str, start: usize) -> Option<usize> {
 }
 
 fn matching_quote(text: &str, target: usize, quote: char) -> Option<usize> {
-    let mut opening = None;
+    // Track string state so escape handling mirrors the rest of the editor
+    // (#611): conforming strings never treat `\` as an escape, doubled quotes
+    // always do, and E'...' strings (Postgres) do too.
+    let bytes = text.as_bytes();
     let mut offset = 0;
+    let mut in_string = false;
+    let mut in_string_escapes = false;
+    let mut positions = Vec::new();
     while offset < text.len() {
         if let Some(end) = non_quote_protected_end(text, offset) {
             offset = end;
             continue;
         }
         let character = text[offset..].chars().next()?;
-        if character != quote || is_escaped(text, offset) {
+        if in_string {
+            if in_string_escapes && character == '\\' {
+                offset += character.len_utf8();
+                if let Some(next) = text[offset..].chars().next() {
+                    offset += next.len_utf8();
+                }
+                continue;
+            }
+            if character == quote {
+                let next_offset = offset + quote.len_utf8();
+                if text[next_offset..].starts_with(quote) {
+                    offset = next_offset + quote.len_utf8();
+                    continue;
+                }
+                positions.push(offset);
+                in_string = false;
+                offset = next_offset;
+                continue;
+            }
             offset += character.len_utf8();
             continue;
         }
-        let next_offset = offset + character.len_utf8();
-        if text[next_offset..].starts_with(quote) {
-            offset = next_offset + quote.len_utf8();
-            continue;
-        }
-        if opening == Some(offset) {
-            return Some(offset);
-        }
-        if offset == target {
-            if let Some(opening) = opening {
-                return Some(opening);
-            }
-            return find_quote_after(text, next_offset, quote);
-        }
-        opening = Some(offset);
-        offset = next_offset;
-    }
-    None
-}
-
-fn find_quote_after(text: &str, mut offset: usize, quote: char) -> Option<usize> {
-    while offset < text.len() {
-        if let Some(end) = non_quote_protected_end(text, offset) {
-            offset = end;
-            continue;
-        }
-        let character = text[offset..].chars().next()?;
         if character == quote {
-            if is_escaped(text, offset) {
-                offset += character.len_utf8();
-                continue;
-            }
-            let next = offset + character.len_utf8();
-            if text[next..].starts_with(quote) {
-                offset = next + quote.len_utf8();
-                continue;
-            }
-            return Some(offset);
+            in_string = true;
+            in_string_escapes = quote == '\''
+                && offset >= 1
+                && matches!(bytes[offset - 1], b'E' | b'e')
+                && (offset < 2 || {
+                    let before = bytes[offset - 2];
+                    !before.is_ascii_alphanumeric() && before != b'_'
+                });
+            positions.push(offset);
+            offset += quote.len_utf8();
+            continue;
         }
         offset += character.len_utf8();
     }
-    None
+    let index = positions.iter().position(|position| *position == target)?;
+    if index % 2 == 0 {
+        positions.get(index + 1).copied()
+    } else {
+        Some(positions[index - 1])
+    }
 }
 
 // cc-scan:allow HARD_COMPLEXITY — delimiter-end scanner — quote/comment states form one ladder
@@ -257,18 +260,43 @@ fn protected_end(text: &str, offset: usize) -> Option<usize> {
     if rest.starts_with("/*") {
         return Some(text[offset..].find("*/").map_or(text.len(), |end| offset + end + 2));
     }
-    if rest.starts_with('\'') || rest.starts_with('"') || rest.starts_with('`') {
-        let quote = rest.chars().next()?;
-        let mut cursor = offset + quote.len_utf8();
+    if rest.starts_with('\'') {
+        // Only E'...' strings (Postgres) treat backslash as an escape; a
+        // standard conforming string ends at the first quote, with '' as the
+        // doubling escape (#611).
+        let bytes = text.as_bytes();
+        let escapes = offset >= 1
+            && matches!(bytes[offset - 1], b'E' | b'e')
+            && (offset < 2 || {
+                let before = bytes[offset - 2];
+                !before.is_ascii_alphanumeric() && before != b'_'
+            });
+        let mut cursor = offset + 1;
         while cursor < text.len() {
             let character = text[cursor..].chars().next()?;
             cursor += character.len_utf8();
-            if character == '\\' && quote == '\'' {
+            if character == '\\' && escapes {
                 if let Some(escaped) = text[cursor..].chars().next() {
                     cursor += escaped.len_utf8();
                 }
                 continue;
             }
+            if character == '\'' {
+                if text[cursor..].starts_with('\'') {
+                    cursor += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        return Some(cursor);
+    }
+    if rest.starts_with('"') || rest.starts_with('`') {
+        let quote = rest.chars().next()?;
+        let mut cursor = offset + quote.len_utf8();
+        while cursor < text.len() {
+            let character = text[cursor..].chars().next()?;
+            cursor += character.len_utf8();
             if character == quote {
                 if text[cursor..].starts_with(quote) {
                     cursor += quote.len_utf8();
@@ -298,20 +326,6 @@ fn protected_end(text: &str, offset: usize) -> Option<usize> {
         }
     }
     None
-}
-
-fn is_escaped(text: &str, offset: usize) -> bool {
-    let mut backslashes = 0usize;
-    let mut cursor = offset;
-    while cursor > 0 {
-        cursor = text[..cursor].char_indices().next_back().map_or(0, |(index, _)| index);
-        if text[cursor..].starts_with('\\') {
-            backslashes += 1;
-        } else {
-            break;
-        }
-    }
-    backslashes % 2 == 1
 }
 
 fn non_quote_protected_end(text: &str, offset: usize) -> Option<usize> {

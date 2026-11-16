@@ -64,6 +64,7 @@ pub(super) fn on_query_completed(context: &mut QueryResultContext<'_>, request_i
             // One owned copy. `query_result` and `execution_output.result_set`
             // used to each hold another full grid.
             doc.query_results = vec![std::rc::Rc::new(result)];
+            doc.results_stale = false;
             doc.query_result_row_limit = doc.executing_row_limit.take();
             limit_note = query_row_limit::row_limit_note(doc.query_result_row_limit);
             doc.query_result = None;

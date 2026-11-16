@@ -117,3 +117,73 @@ fn unterminated_nested_comment_consumes_to_eof() {
     assert_eq!(tokens[0].kind, SyntaxTokenKind::Comment);
     assert_eq!(tokens[0].range, (0, 14));
 }
+
+#[test]
+fn postgres_e_string_with_escaped_quote_is_one_token() {
+    // PG: E'it\'s ok' — the backslash escape means the quote after the
+    // backslash never terminates the string (#611).
+    let tokens = SqlHighlighter::new(SqlDialect::Postgres).tokenize("E'it\\'s ok'");
+    let kinds: Vec<SyntaxTokenKind> = tokens.iter().map(|token| token.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![SyntaxTokenKind::Identifier, SyntaxTokenKind::String],
+        "E'-string must be highlighted as one whole string"
+    );
+    assert_eq!(tokens[1].range, (1, "E'it\\'s ok'".len()));
+}
+
+#[test]
+fn postgres_standard_string_ends_at_first_quote() {
+    // Standard conforming strings do NOT treat backslash as an escape: in
+    // 'it\' the backslash is literal and the string ends at the quote (#611).
+    let tokens = SqlHighlighter::new(SqlDialect::Postgres).tokenize("SELECT 'it\\'");
+    let string = tokens
+        .iter()
+        .find(|token| token.kind == SyntaxTokenKind::String)
+        .expect("a string token exists");
+    assert_eq!(string.range, (7, 12));
+}
+
+#[test]
+fn sqlite_string_ignores_backslash_escapes() {
+    let tokens = SqlHighlighter::new(SqlDialect::SQLite).tokenize("SELECT 'a\\', 1");
+    let string = tokens
+        .iter()
+        .find(|token| token.kind == SyntaxTokenKind::String)
+        .expect("a string token exists");
+    assert_eq!(string.range, (7, 11));
+}
+
+#[test]
+fn e_prefix_must_be_a_standalone_word() {
+    // `some'` — the `e` is not a word on its own, so the string is standard
+    // and ends at its quote, even with a backslash at the end of the prefix.
+    let tokens = SqlHighlighter::new(SqlDialect::Postgres).tokenize("some'1\\', 2");
+    let string = tokens
+        .iter()
+        .find(|token| token.kind == SyntaxTokenKind::String)
+        .expect("a string token exists");
+    assert_eq!(string.range, (4, 8));
+}
+
+#[test]
+fn doubled_quote_escapes_inside_e_string() {
+    let tokens = SqlHighlighter::new(SqlDialect::Postgres).tokenize("E'a''b'");
+    let string = tokens
+        .iter()
+        .find(|token| token.kind == SyntaxTokenKind::String)
+        .expect("a string token exists");
+    assert_eq!(string.range, (1, 7));
+}
+
+#[test]
+fn numeric_prefix_e_is_not_an_e_string() {
+    // `1e'...'` — the `e` belongs to the number literal, so the string is a
+    // standard conforming string: backslash stays literal and it ends at the
+    // next quote (#611).
+    let tokens = SqlHighlighter::new(SqlDialect::Postgres).tokenize("1e'x\\y'");
+    assert_eq!(tokens[0].kind, SyntaxTokenKind::Number);
+    assert_eq!(tokens[0].range, (0, 2));
+    assert_eq!(tokens[1].kind, SyntaxTokenKind::String);
+    assert_eq!(tokens[1].range, (2, 7));
+}

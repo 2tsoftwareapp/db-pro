@@ -254,12 +254,17 @@ fn default_query_timeout() -> u64 {
     30_000
 }
 
+/// Product ceiling for client-side row caps. The UI row-limit selector caps at
+/// this value and connectors stop reading there; `LIMIT`/`TOP` injection decides
+/// how many rows a plain read actually returns (#604).
+pub const PRODUCT_MAX_ROWS: u64 = 100_000;
+
 fn default_max_rows() -> u64 {
-    500
+    PRODUCT_MAX_ROWS
 }
 
 const MAX_CONNECTION_NAME_LEN: usize = 128;
-const MAX_MAX_ROWS: u64 = 100_000;
+const MAX_MAX_ROWS: u64 = PRODUCT_MAX_ROWS;
 
 /// True when a value would be parsed as a CLI option (`-oProxyCommand=…`) if it
 /// reached `ssh` as the positional `user@host` argument.

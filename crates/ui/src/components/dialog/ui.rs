@@ -32,6 +32,7 @@ pub struct Dialog<'a> {
     body_height: Option<f32>,
     id_salt: Option<Id>,
     theme: DbProTheme,
+    body_scroll_salt: Option<Id>,
 }
 
 impl<'a> Dialog<'a> {
@@ -44,6 +45,7 @@ impl<'a> Dialog<'a> {
             body_height: None,
             id_salt: None,
             theme,
+            body_scroll_salt: None,
         }
     }
 
@@ -75,6 +77,13 @@ impl<'a> Dialog<'a> {
 
     pub fn id_salt(mut self, salt: impl Hash + std::fmt::Debug) -> Self {
         self.id_salt = Some(Id::new(salt));
+        self
+    }
+
+    /// Salt the body scroll area's identity; pass a fresh value per dialog
+    /// open to reset the scroll offset to the top (#609).
+    pub fn body_scroll_salt(mut self, salt: Id) -> Self {
+        self.body_scroll_salt = Some(salt);
         self
     }
 
@@ -137,6 +146,7 @@ impl<'a> Dialog<'a> {
         let title = self.title;
         let description = self.description;
         let open = self.open;
+        let body_scroll_salt = self.body_scroll_salt;
 
         let prev_height = ctx.data(|d| d.get_temp::<f32>(id.with("prev_height")));
         let pinned_body = pinned_body_height(
@@ -200,6 +210,7 @@ impl<'a> Dialog<'a> {
                         body_height: pinned_body,
                         theme,
                         anchor_id,
+                        body_scroll_salt,
                     },
                     card_ui,
                     add_frame,
@@ -238,6 +249,7 @@ struct DialogCardPaint<'a> {
     body_height: Option<f32>,
     theme: DbProTheme,
     anchor_id: Id,
+    body_scroll_salt: Option<Id>,
 }
 
 fn paint_dialog_card<R>(
@@ -254,6 +266,7 @@ fn paint_dialog_card<R>(
         body_height,
         theme,
         anchor_id,
+        body_scroll_salt,
     } = card;
     Frame {
         fill: theme.surface_floating,
@@ -294,6 +307,7 @@ fn paint_dialog_card<R>(
             body_height,
             inner_width: inner_w,
             theme,
+            body_scroll_salt,
         };
         add_frame(&mut frame)
     })

@@ -454,7 +454,7 @@ fn db_config(
         ssl_client_cert_path: None,
         ssl_client_key_path: None,
         query_timeout_ms: 30_000,
-        max_rows: 500,
+        db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
         color: None,
         tags: Vec::new(),
         group: None,

@@ -77,10 +77,6 @@ impl CompletionState {
         self.trigger_kind = None;
     }
 
-    pub fn clear(&mut self) {
-        self.close();
-    }
-
     pub fn select_next(&mut self) {
         if !self.items.is_empty() {
             self.selected_index = (self.selected_index + 1) % self.items.len();

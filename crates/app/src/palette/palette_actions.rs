@@ -97,10 +97,13 @@ impl DbProApp {
             PaletteAction::FormatSql => {
                 self.workspace.active_tab = WorkspaceTab::Query;
                 let capabilities = self.query_capabilities();
-                if let Some(request_id) = query_diagnostics_view::format_active_query(&mut self.query, capabilities) {
+                if let Some(request_id) = query_diagnostics_view::format_active_query(
+                    &mut self.query,
+                    capabilities,
+                    &mut self.feedback,
+                ) {
                     self.send_command_best_effort(UiCommand::CancelSqlPrediction { request_id });
                 }
-                self.feedback.runtime_message = "SQL formatted".to_owned();
             }
             PaletteAction::SwitchConnection(connection_id) => self.switch_connection_from_palette(connection_id),
             PaletteAction::TogglePinTable(table) => self.toggle_pinned_table(table),

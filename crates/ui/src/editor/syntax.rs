@@ -436,6 +436,10 @@ const SQL_FUNCTIONS: &[&str] = &[
     "SHA256",
 ];
 
+fn is_identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b >= 128
+}
+
 pub struct SqlHighlighter {
     pub dialect: SqlDialect,
 }
@@ -536,10 +540,18 @@ impl SqlHighlighter {
                 }
             }
 
-            // String literal: '...'
+            // String literal: '...' — standard conforming strings do NOT
+            // treat backslash as an escape; only E'...' strings (Postgres)
+            // and the Generic dialect do. `\\'` inside an E-string does not
+            // terminate it (#611).
             if b == b'\'' {
+                let escapes = self.string_escapes_active(bytes, i);
                 i += 1;
                 while i < len {
+                    if escapes && bytes[i] == b'\\' && i + 1 < len {
+                        i += 2;
+                        continue;
+                    }
                     if bytes[i] == b'\'' {
                         i += 1;
                         // Escaped quote ''
@@ -549,11 +561,7 @@ impl SqlHighlighter {
                         }
                         break;
                     }
-                    if bytes[i] == b'\\' && i + 1 < len {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
+                    i += 1;
                 }
                 tokens.push(SyntaxToken {
                     range: (start, i),
@@ -660,6 +668,27 @@ impl SqlHighlighter {
         }
 
         tokens
+    }
+
+    /// Whether the string literal opening at `string_start` (index of the
+    /// quote byte) treats `\` as an escape character. Postgres only for
+    /// E'...' / e'...' strings; Generic (MySQL-style) always; SQLite never
+    /// (#611).
+    fn string_escapes_active(&self, bytes: &[u8], string_start: usize) -> bool {
+        match self.dialect {
+            SqlDialect::SQLite => false,
+            SqlDialect::Generic => true,
+            SqlDialect::Postgres => {
+                // E-prefix only when it stands as a word on its own.
+                if string_start >= 1 {
+                    let prev = bytes[string_start - 1];
+                    if prev == b'E' || prev == b'e' {
+                        return string_start < 2 || !is_identifier_byte(bytes[string_start - 2]);
+                    }
+                }
+                false
+            }
+        }
     }
 
     pub fn token_color(&self, kind: SyntaxTokenKind, theme: &DbProTheme) -> Color32 {

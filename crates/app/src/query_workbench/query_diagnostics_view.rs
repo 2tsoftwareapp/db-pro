@@ -7,7 +7,11 @@ use sqlparser::dialect::{GenericDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 use std::time::{Duration, Instant};
 
-pub(super) fn format_active_query(query: &mut QueryFeatureState, capabilities: CapabilityLookup) -> Option<RequestId> {
+pub(super) fn format_active_query(
+    query: &mut QueryFeatureState,
+    capabilities: CapabilityLookup,
+    feedback: &mut FeedbackState,
+) -> Option<RequestId> {
     let doc_index = query.session.active_document_index;
     let cancelled_prediction = query.session.invalidate_prediction(doc_index);
     let dialect = if capabilities.allows(|caps| caps.query.numbered_parameters) {
@@ -16,7 +20,13 @@ pub(super) fn format_active_query(query: &mut QueryFeatureState, capabilities: C
         SqlDialect::SQLite
     };
     if let Some(doc) = query.session.documents.get_mut(doc_index) {
-        format_query_document(doc, dialect);
+        // #605: formatting an untouched document used to be a silent no-op.
+        let changed = format_query_document(doc, dialect);
+        feedback.set_runtime_message(if changed {
+            "SQL formatted"
+        } else {
+            "Already well formatted"
+        });
     }
     cancelled_prediction
 }
@@ -69,18 +79,59 @@ pub(super) fn analyze_sql_diagnostics_with_lint(
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_string = false;
+    let mut in_string_escapes = false;
     let mut string_start_byte = 0;
 
-    for (byte_offset, ch) in sql.char_indices() {
+    // E'...' strings (Postgres) and MySQL strings treat backslash as an
+    // escape; standard conforming strings do not (#611).
+    let mysql_like = driver.eq_ignore_ascii_case("mysql");
+    let postgres_like = capabilities
+        .as_ref()
+        .is_some_and(|caps| caps.query.numbered_parameters);
+    let bytes = sql.as_bytes();
+    let mut idx = 0usize;
+    while idx < sql.len() {
+        let Some(ch) = sql[idx..].chars().next() else {
+            break;
+        };
+        let byte_offset = idx;
+        idx += ch.len_utf8();
         if ch == '\'' {
             if !in_string {
                 in_string = true;
                 string_start_byte = byte_offset;
-            } else {
-                in_string = false;
+                in_string_escapes = if mysql_like {
+                    true
+                } else if postgres_like && byte_offset >= 1 {
+                    let prev = bytes[byte_offset - 1];
+                    matches!(prev, b'E' | b'e')
+                        && (byte_offset < 2 || !is_identifier_byte(bytes[byte_offset - 2]))
+                } else {
+                    false
+                };
+                current.push(ch);
+                continue;
             }
+            // Doubled quote is the standard string escape.
+            if sql[idx..].starts_with('\'') {
+                current.push('\'');
+                current.push('\'');
+                idx += 1;
+                continue;
+            }
+            in_string = false;
             current.push(ch);
-        } else if in_string {
+            continue;
+        }
+        if ch == '\\' && in_string && in_string_escapes {
+            current.push(ch);
+            if let Some(escaped) = sql[idx..].chars().next() {
+                current.push(escaped);
+                idx += escaped.len_utf8();
+            }
+            continue;
+        }
+        if in_string {
             current.push(ch);
         } else if matches!(ch, '(' | ')') {
             tokens.push((current.to_lowercase(), byte_offset));
@@ -374,4 +425,9 @@ fn merge_editor_diagnostics(
     }
     combined.extend(syntax);
     deduplicate_diagnostics(combined)
+}
+
+/// Word-boundary helper for the E-string prefix check (#611).
+fn is_identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b >= 128
 }

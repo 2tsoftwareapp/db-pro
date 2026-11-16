@@ -79,6 +79,7 @@ connection:
   browse_file: "Chọn tập tin…"
   sqlite_info_hint: "SQLite chạy trực tiếp in-process. Bảng dữ liệu, chỉ mục (index), trigger và khóa ngoại được tự động đọc."
   test_connection: "Kiểm tra kết nối"
+  diagnostics_hint: "Chạy Kiểm tra để xác minh kết nối này."
   save_connection: "Lưu kết nối"
   update_connection: "Cập nhật kết nối"
   cancel: "Hủy"

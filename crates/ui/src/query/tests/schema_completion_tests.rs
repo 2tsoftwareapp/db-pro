@@ -761,3 +761,33 @@ fn completion_result_length_is_at_most_50() {
     assert!(from_items.iter().all(|item| item.kind == CompletionItemKind::Table));
     assert_eq!(from_items[0].label, "aaa_table");
 }
+
+#[test]
+fn completion_is_suppressed_directly_after_as_alias_position() {
+    let summary = duplicate_users_summary();
+    // Cursor right after the `AS ` keyword — alias position must not suggest
+    // columns/keywords (#607).
+    let (prefix, items) = provide_at("select id as ", &summary, false);
+    assert!(items.is_empty(), "alias position must not offer completions");
+    assert_eq!(prefix, "");
+
+    let (prefix, items) = provide_at("select 1 AS\n", &summary, false);
+    assert!(items.is_empty(), "alias position after newline must not offer completions");
+    assert_eq!(prefix, "");
+}
+
+#[test]
+fn completion_still_offers_keywords_inside_expressions_without_as() {
+    let summary = duplicate_users_summary();
+    // Sanity: the AS suppression must not leak into unrelated contexts.
+    let (_, items) = provide_at("select ", &summary, false);
+    assert!(!items.is_empty(), "SELECT list itself should still resolve completions");
+}
+
+#[test]
+fn manual_completion_after_as_still_opens() {
+    let summary = duplicate_users_summary();
+    // Ctrl+Space is an explicit ask — it must keep working even after AS.
+    let (_, items) = provide_at("select id as ", &summary, true);
+    assert!(!items.is_empty(), "manual trigger must override the AS suppression");
+}

@@ -1,4 +1,4 @@
-use super::query_editor_support::apply_completion_item;
+use super::query_editor_support::{apply_completion_item, close_completion};
 use super::*;
 use crate::editor::{CompletionItem, CompletionItemKind, SqlDialect};
 use egui::RichText;
@@ -57,7 +57,7 @@ pub(super) fn draw_floating_completion_popup(
     }
 
     if close_popup {
-        doc.completion.close();
+        close_completion(doc);
         return;
     }
 
@@ -160,7 +160,7 @@ pub(super) fn draw_floating_completion_popup(
                 .is_some_and(|pos| !area_resp.response.rect.contains(pos))
     });
     if clicked_outside {
-        doc.completion.close();
+        close_completion(doc);
     }
 }
 

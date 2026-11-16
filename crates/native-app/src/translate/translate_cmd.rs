@@ -85,7 +85,7 @@ pub(crate) fn draft_to_domain(
                 }
             },
             query_timeout_ms: 30_000,
-            max_rows: 500,
+            db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
             color: None,
             tags: {
                 let mut tags: Vec<String> = draft

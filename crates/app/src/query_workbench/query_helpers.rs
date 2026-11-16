@@ -1,4 +1,5 @@
 //! Query document helpers: atomic export I/O, diagnostics dedupe, and SQL formatting.
+use super::query_editor_support::close_completion;
 use super::*;
 use crate::editor::{Diagnostic, EditorSnapshot, SelectionRange, SqlDialect};
 
@@ -46,6 +47,47 @@ pub(crate) fn write_file_atomically(path: &std::path::Path, contents: &[u8]) -> 
         let _ = std::fs::remove_file(&temp_path);
     }
     result
+}
+
+/// Raw service errors like `connection 7fd5a510-… is not active` (#603) name internal
+/// ids the user cannot act on. Rewrite them to a human instruction; anything else is
+/// passed through untouched.
+pub(crate) fn friendly_connection_error(message: &str) -> String {
+    const NEEDLE: &str = " is not active";
+    const PREFIX: &str = "connection ";
+    let mut rest = message;
+    let mut out = String::with_capacity(message.len() + 48);
+    while let Some(end) = rest.find(NEEDLE) {
+        let head = &rest[..end];
+        match head.rfind(PREFIX) {
+            Some(start) if is_uuid_like(&head[start + PREFIX.len()..]) => {
+                out.push_str(&rest[..start]);
+                out.push_str(
+                    "the connection was closed — reconnect it from the Connections list and run again",
+                );
+                rest = &rest[end + NEEDLE.len()..];
+            }
+            _ => {
+                out.push_str(head);
+                out.push_str(NEEDLE);
+                rest = &rest[end + NEEDLE.len()..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Exactly the canonical UUID shape the registry emits (`xxxxxxxx-xxxx-…`).
+fn is_uuid_like(token: &str) -> bool {
+    token.len() == 36
+        && token.char_indices().all(|(index, character)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                character == '-'
+            } else {
+                character.is_ascii_hexdigit()
+            }
+        })
 }
 
 pub(crate) fn deduplicate_messages(messages: Vec<String>) -> Vec<String> {
@@ -117,14 +159,20 @@ fn ranges_overlap(left: (usize, usize), right: (usize, usize)) -> bool {
     left.0 < right.1 && right.0 < left.1
 }
 
-pub(crate) fn format_query_document(doc: &mut QueryDocument, dialect: SqlDialect) {
+/// Format the selected range, or — with no selection — the whole document.
+/// Returns `true` when the buffer changed, so callers can tell the user
+/// something happened instead of failing silently (#605).
+pub(crate) fn format_query_document(doc: &mut QueryDocument, dialect: SqlDialect) -> bool {
     let original_selection = doc.selection;
     let had_selection = !original_selection.is_empty();
+    if !had_selection {
+        return format_whole_document(doc, dialect);
+    }
     let (start, end) = original_selection.normalized();
     let original_text = doc.buffer.slice(start, end).to_owned();
     let formatted_text = crate::query::sql_format::format_sql_for_dialect(&original_text, dialect);
     if formatted_text == original_text {
-        return;
+        return false;
     }
 
     let cursor_after = if had_selection {
@@ -161,11 +209,61 @@ pub(crate) fn format_query_document(doc: &mut QueryDocument, dialect: SqlDialect
     );
     doc.cursor.set_offset(&doc.buffer, cursor_after);
     doc.selection = SelectionRange::new(anchor_after, cursor_after);
-    doc.completion.clear();
+    close_completion(doc);
     doc.invalidate_prediction();
     doc.reanalyze(dialect);
     doc.search.update_matches(doc.buffer.text());
     doc.dirty = true;
+    true
+}
+
+/// No selection: format the entire buffer and carry the caret to the same
+/// line/column it had before (clamped), instead of silently doing nothing (#605).
+fn format_whole_document(doc: &mut QueryDocument, dialect: SqlDialect) -> bool {
+    let original_text = doc.buffer.slice(0, doc.buffer.len_bytes()).to_owned();
+    let trimmed = original_text.trim();
+    let formatted_text = crate::query::sql_format::format_sql_for_dialect(trimmed, dialect);
+    if formatted_text == trimmed {
+        return false;
+    }
+
+    let (line, col) = doc.buffer.offset_to_line_col(doc.cursor.offset);
+    let mut cursor_after = formatted_text.len();
+    let mut byte_acc = 0usize;
+    for (index, text_line) in formatted_text.split('\n').enumerate() {
+        if index == line {
+            let col_bytes = text_line
+                .char_indices()
+                .nth(col)
+                .map(|(offset, _)| offset)
+                .unwrap_or(text_line.len());
+            cursor_after = byte_acc + col_bytes;
+            break;
+        }
+        byte_acc += text_line.len() + 1;
+    }
+
+    doc.buffer.replace_with_snapshot(
+        0,
+        doc.buffer.len_bytes(),
+        &formatted_text,
+        EditorSnapshot {
+            cursor_offset: doc.cursor.offset,
+            anchor_offset: doc.selection.anchor,
+        },
+        EditorSnapshot {
+            cursor_offset: cursor_after,
+            anchor_offset: cursor_after,
+        },
+    );
+    doc.cursor.set_offset(&doc.buffer, cursor_after);
+    doc.selection = SelectionRange::new(cursor_after, cursor_after);
+    close_completion(doc);
+    doc.invalidate_prediction();
+    doc.reanalyze(dialect);
+    doc.search.update_matches(doc.buffer.text());
+    doc.dirty = true;
+    true
 }
 
 /// Toggles `-- ` line comments on the caret line, or on every line the selection touches.
@@ -201,7 +299,7 @@ pub(crate) fn toggle_query_comment(doc: &mut QueryDocument, dialect: SqlDialect)
     );
     doc.cursor.set_offset(&doc.buffer, cursor_after);
     doc.selection = SelectionRange::new(cursor_after, cursor_after);
-    doc.completion.clear();
+    close_completion(doc);
     doc.invalidate_prediction();
     doc.reanalyze(dialect);
     doc.search.update_matches(doc.buffer.text());

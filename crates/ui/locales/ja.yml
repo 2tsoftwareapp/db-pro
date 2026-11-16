@@ -79,6 +79,7 @@ connection:
   browse_file: "ファイルを参照…"
   sqlite_info_hint: "SQLiteはプロセス内で動作します。テーブル、インデックス、トリガー、外部キーは自動的に読み込まれます。"
   test_connection: "接続テスト"
+  diagnostics_hint: "この接続を検証するには接続テストを実行してください。"
   save_connection: "接続を保存"
   update_connection: "接続を更新"
   cancel: "キャンセル"

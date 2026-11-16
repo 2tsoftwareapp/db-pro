@@ -79,6 +79,7 @@ connection:
   browse_file: "浏览文件…"
   sqlite_info_hint: "SQLite 直接在进程内运行。表、索引、触发器和外键会自动读取并内省。"
   test_connection: "测试连接"
+  diagnostics_hint: "运行“测试连接”以验证此连接。"
   save_connection: "保存连接"
   update_connection: "更新连接"
   cancel: "取消"

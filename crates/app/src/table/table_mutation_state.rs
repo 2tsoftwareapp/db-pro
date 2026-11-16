@@ -309,13 +309,18 @@ impl ApplyPlanBuilder {
     }
 }
 
+/// Keep the runtime's own code for SQL-originated failures — flattening a
+/// real error (`QUERY_FAILED` carrying a PG message like
+/// `operator does not exist: text = uuid`) into `INTERNAL` throws away the
+/// only machine-readable hint we have (#610). Only the generic wrapper is
+/// shortened for the badge.
 fn normalize_failure_code(code: &str) -> &str {
     match code {
         "CONSTRAINT_VIOLATION" => "CONSTRAINT_VIOLATION",
         "VALIDATION_ERROR" => "VALIDATION_ERROR",
         "CONFLICT" => "CONFLICT",
         "INTERNAL_ERROR" => "INTERNAL",
-        _ => "INTERNAL",
+        other => other,
     }
 }
 

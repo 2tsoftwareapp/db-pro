@@ -164,6 +164,7 @@ impl<'a> PasswordInput<'a> {
 
             let edit_response = frame_output.inner;
             let frame_rect = frame_output.response.rect;
+            super::super::input::handler::register_text_field(ui.ctx(), edit_response.id, frame_rect);
             let mut info_label = self.label.as_deref().unwrap_or("Password").to_string();
             if self.required {
                 info_label.push_str(", required");

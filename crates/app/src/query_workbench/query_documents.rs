@@ -60,6 +60,11 @@ impl QueryDocumentContext<'_, '_> {
         }
         let (document_id, document_number) = self.next_document_identity();
         let mut document = QueryDocument::new(document_id, format!("Query {document_number}"), text.into());
+        // Preselect the template: the first keystroke replaces it instead of
+        // prepending to `SELECT *` (#607).
+        let len = document.text().len();
+        document.selection = crate::editor::SelectionRange::new(0, len);
+        document.cursor.set_offset(&document.buffer, len);
         document.connection_id = connection_id.or_else(|| self.active_connection_id.clone());
         document.schema = Some(self.active_schema.clone());
         self.query_session.add_document(document);

@@ -36,6 +36,7 @@ pub(crate) struct ConnectionRowContext<'a> {
     pub(crate) theme: DbProTheme,
     pub(crate) connection: &'a UiConnectionSummary,
     pub(crate) is_connected: bool,
+    pub(crate) is_active: bool,
     pub(crate) is_connecting: bool,
     pub(crate) is_failed: bool,
     pub(crate) modifier: &'static str,
@@ -104,9 +105,11 @@ impl ConnectionRowContext<'_> {
             collapsing.set_open(!is_open);
             collapsing.store(ui.ctx());
         } else if clicked {
-            if self.is_connected {
+            if self.is_connected && self.is_active {
                 collapsing.set_open(!is_open);
             } else {
+                // Not the focused connection (possibly live behind a bound tab):
+                // clicking makes it the active connection, even while its session lives.
                 if !self.is_connecting {
                     actions.push(ConnectionRowAction::Connect);
                 }

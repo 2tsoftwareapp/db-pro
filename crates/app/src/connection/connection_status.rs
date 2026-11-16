@@ -168,11 +168,11 @@ pub(super) fn runtime_status(
 }
 
 pub(super) fn statusbar_state(
-    lifecycle: &ConnectionLifecycleState,
+    shown_connected: bool,
     feedback: &FeedbackState,
     theme: DbProTheme,
 ) -> (Icon, Color32, &'static str) {
-    if lifecycle.is_connected() && lifecycle.active_connection_id().is_some() {
+    if shown_connected {
         return (Icon::CircleCheck, theme.success, "Connected");
     }
     if feedback.runtime_message.starts_with("Connecting") {
@@ -218,7 +218,9 @@ pub(super) fn connection_indicator(
     theme: DbProTheme,
 ) -> (Icon, Color32) {
     let is_active = lifecycle.active_connection_id() == Some(connection.id.as_str());
-    let is_connected = is_active && lifecycle.is_connected();
+    // A session behind a bound query tab keeps working after the connection loses
+    // the global active slot — it is not "disconnected" (#603).
+    let is_connected = (is_active && lifecycle.is_connected()) || lifecycle.has_live_session(&connection.id);
     let is_failed = lifecycle.has_failed_connection(&connection.id);
     let icon = if is_connected {
         Icon::CircleCheck

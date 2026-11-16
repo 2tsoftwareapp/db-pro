@@ -2,6 +2,7 @@
 // cc-scan:allow-file HARD_PARAMS,TOO_MANY_PARAMS,DUPLICATE_BLOCK
 // egui painter/view file: fns are linear layout code; branches are per-state paint variants.
 //! Keyboard shortcuts and query dispatch / destructive-run gate.
+use super::query_editor_support::close_completion;
 use super::*;
 
 /// Parameters shared by query dispatch and the destructive-confirm hold path.
@@ -222,8 +223,18 @@ impl DbProApp {
     fn format_focused_query(&mut self) {
         let dialect = self.editor_dialect();
         let index = self.query.session.active_document_index;
-        if let Some(document) = self.query.session.documents.get_mut(index) {
-            query_view::format_query_document(document, dialect);
+        let changed = self
+            .query
+            .session
+            .documents
+            .get_mut(index)
+            .map(|document| query_view::format_query_document(document, dialect));
+        if let Some(changed) = changed {
+            self.feedback.set_runtime_message(if changed {
+                "SQL formatted"
+            } else {
+                "Already well formatted"
+            });
         }
     }
 
@@ -276,6 +287,9 @@ impl DbProApp {
     }
 
     fn dispatch_query_inner(&mut self, bound_params: Option<Vec<db_pro_core::domain::query::QueryParam>>) -> bool {
+        if let Some(doc) = self.query.session.documents.get_mut(self.query.session.active_document_index) {
+            close_completion(doc);
+        }
         if self.query.session.active_running_request().is_some() {
             return false;
         }
@@ -386,6 +400,14 @@ impl DbProApp {
         if sql.is_empty() {
             self.feedback.runtime_message = "Query is empty".to_owned();
             return;
+        }
+        if let Some(doc) = self
+            .query
+            .session
+            .documents
+            .get_mut(self.query.session.active_document_index)
+        {
+            close_completion(doc);
         }
         let applied_limit =
             query_row_limit::effective_row_limit(&sql, self.query.execution.query_row_limit, self.active_driver());

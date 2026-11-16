@@ -6,7 +6,6 @@ use super::layout::*;
 use super::logic::*;
 use crate::components::alert::{Alert, AlertVariant};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
-use crate::components::dialog::config::DIALOG_FORM_BODY_HEIGHT;
 use crate::components::dialog::Dialog;
 use crate::components::input::Input;
 
@@ -165,8 +164,11 @@ impl<'view, 'bridge> ConnectionDialogView<'view, 'bridge> {
         Dialog::new(&mut open, title, self.theme)
             .description(desc)
             .width(820.0)
-            .body_height(DIALOG_FORM_BODY_HEIGHT)
+            // Pinned body leaves headroom for the fixed diagnostics console in
+            // the footer so the card fits a 752 px window (#609).
+            .body_height(460.0)
             .id_salt("connection_form_dialog")
+            .body_scroll_salt(egui::Id::new("connection_form_dialog_body").with(self.dialog.open_generation))
             .show_framed_ctx(ctx, |frame| {
                 frame.body(|ui| {
                     self.draw_connection_form(ui);
@@ -284,36 +286,70 @@ impl<'view, 'bridge> ConnectionDialogView<'view, 'bridge> {
         }
     }
 
-    fn draw_connection_feedback(&mut self, ui: &mut egui::Ui) {
+    fn draw_connection_feedback(&mut self, _ui: &mut egui::Ui) {
+        // Test failures surface inline in the fixed diagnostics strip next to
+        // the Test button; the toast (kept for the feedback log) anchors to
+        // the top-right so it never overlaps the footer's Save button (#609).
         if let Some(error) = self.dialog.take_error_toast() {
-            self.feedback.show_error_toast(error);
-        }
-        if self.dialog.test_valid {
-            ui.add_space(SPACE_XS);
-            Alert::new(t!("alerts.verified"), t!("alerts.verified_desc"), self.theme)
-                .variant(AlertVariant::Success)
-                .show(ui);
-        }
-        if let Some(report) = &self.dialog.diagnostics {
-            ui.add_space(SPACE_XS);
-            for stage in &report.stages {
-                let mark = if stage.ok { "OK" } else { "FAIL" };
-                let color = if stage.ok {
-                    self.theme.success
-                } else {
-                    self.theme.danger
-                };
-                ui.label(
-                    RichText::new(format!("{mark} · {} · {}", stage.stage.label(), stage.message))
-                        .small()
-                        .monospace()
-                        .color(color),
-                );
-            }
+            self.feedback
+                .show_error_toast_at(error, crate::components::overlay::ToastPosition::TopRight);
         }
     }
 
+    /// Diagnostics console pinned above the footer's button row.
+    ///
+    /// The strip always reserves the same height, so running a test never
+    /// inserts or removes rows above the inputs — the form cannot shift
+    /// under the user's cursor (#609).
+    fn draw_diagnostics_strip(&mut self, ui: &mut egui::Ui) {
+        const ROW_HEIGHT: f32 = 16.0;
+        const ROWS: usize = 5;
+
+        let theme = self.theme;
+        egui::Frame {
+            fill: theme.surface_2,
+            stroke: egui::Stroke::new(STROKE_THIN, theme.border_subtle),
+            inner_margin: egui::Margin::symmetric(SPACE_SM as i8, SPACE_XS as i8),
+            corner_radius: egui::CornerRadius::same(RADIUS_SM as u8),
+            ..Default::default()
+        }
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ROW_HEIGHT * ROWS as f32),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if let Some(report) = &self.dialog.diagnostics {
+                        for stage in report.stages.iter().take(ROWS) {
+                            let (mark, color) = if stage.ok {
+                                ("OK", theme.success)
+                            } else {
+                                ("FAIL", theme.danger)
+                            };
+                            ui.add(egui::Label::new(
+                                RichText::new(format!("{mark} · {} · {}", stage.stage.label(), stage.message))
+                                    .small()
+                                    .monospace()
+                                    .color(color),
+                            ).truncate());
+                        }
+                    } else {
+                        let is_testing = self.lifecycle.pending_operation() == Some(PendingConnectionOperation::Test);
+                        let hint = if is_testing {
+                            t!("status.testing").to_string()
+                        } else {
+                            t!("connection.diagnostics_hint").to_string()
+                        };
+                        ui.label(RichText::new(hint).small().color(theme.text_muted));
+                    }
+                },
+            );
+        });
+        ui.add_space(SPACE_XS);
+    }
+
     pub(crate) fn draw_connection_footer(&mut self, ui: &mut egui::Ui) {
+        self.draw_diagnostics_strip(ui);
         ui.horizontal(|ui| {
             let pending_operation = self.lifecycle.pending_operation();
             let has_pending_request = self.lifecycle.pending_request().is_some();

@@ -1358,6 +1358,37 @@ fn internal_error_code_is_normalized_for_mutation_state() {
 }
 
 #[test]
+fn sql_originated_failure_code_passes_through_for_mutation_state() {
+    // #610: a SQL-originated failure keeps the runtime's code and real
+    // message instead of being flattened into INTERNAL.
+    let mut app = DbProApp {
+        table: TableEditorState {
+            mutation: TableMutationState {
+                staged_apply_request: Some(crate::RequestId(9)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    app.staged_apply_failed(StagedApplyFailure {
+        statement_index: usize::MAX,
+        code: "QUERY_FAILED",
+        message: "operator does not exist: text = uuid",
+        rolled_back: true,
+    });
+
+    let failure = app
+        .table
+        .mutation
+        .table_mutation_error
+        .expect("error should be visible");
+    assert_eq!(failure.code, "QUERY_FAILED");
+    assert_eq!(failure.message, "operator does not exist: text = uuid");
+}
+
+#[test]
 fn explain_query_uses_selected_connection_and_switches_output() {
     let (bridge, command_rx, _event_tx) = TaskBridge::with_channels();
     let mut app = DbProApp::with_task_bridge(bridge);
@@ -1555,7 +1586,7 @@ fn selected_connection_is_not_shown_as_connected() {
             .1,
         app.theme.accent
     );
-    assert_eq!(app.statusbar_state().2, "Not connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Not connected");
     assert!(!app.can_mutate_active_connection());
     app.connection.lifecycle.set_connected(true);
     assert_eq!(
@@ -1563,15 +1594,15 @@ fn selected_connection_is_not_shown_as_connected() {
             .1,
         app.theme.success
     );
-    assert_eq!(app.statusbar_state().2, "Connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Connected");
     assert!(app.can_mutate_active_connection());
     app.connection.catalog.connections_mut()[0].readonly = true;
     assert!(!app.can_mutate_active_connection());
     app.feedback.runtime_message = "Table data failed · timeout".to_owned();
     assert!(app.has_runtime_error());
-    assert_eq!(app.statusbar_state().2, "Connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Connected");
     app.connection.lifecycle.set_connected(false);
-    assert_eq!(app.statusbar_state().2, "Runtime error");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Runtime error");
 }
 
 #[test]

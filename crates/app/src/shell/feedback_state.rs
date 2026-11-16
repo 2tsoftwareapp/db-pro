@@ -85,11 +85,17 @@ impl FeedbackState {
     }
 
     pub(crate) fn show_error_toast(&mut self, message: impl Into<String>) {
+        self.show_error_toast_at(message, ToastPosition::BottomRight);
+    }
+
+    /// Toast anchored to a caller-chosen corner — modal dialogs use this so
+    /// the toast never covers the dialog's footer actions (#609).
+    pub(crate) fn show_error_toast_at(&mut self, message: impl Into<String>, position: ToastPosition) {
         // Keep the error in the log too: the toast is persistent now, but the
         // log survives dismissing it (#571).
         let message = message.into();
         self.remember(message.clone(), None, true);
-        self.toasts.error(message, ToastPosition::BottomRight);
+        self.toasts.error(message, position);
     }
 
     pub(crate) fn show_success_toast(&mut self, message: impl Into<String>) {
