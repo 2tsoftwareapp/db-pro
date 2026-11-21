@@ -11,6 +11,18 @@ pub(crate) struct RowIdentity {
     pub(crate) original_pk_data_types: Vec<String>,
 }
 
+impl RowIdentity {
+    /// True when both identities address the same row.
+    ///
+    /// `original_pk_data_types` is binding metadata, not identity (#587): a
+    /// caller that has no column metadata leaves it empty and still refers to
+    /// the same row, so comparing it here would strand staged edits.
+    pub(crate) fn same_row(&self, other: &Self) -> bool {
+        self.original_pk_columns == other.original_pk_columns
+            && self.original_pk_values == other.original_pk_values
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StagedChange {
     Update {
@@ -156,7 +168,7 @@ impl ChangeSet {
                 column_index: column,
                 identity: existing_identity,
                 ..
-            } if *column == *column_index && existing_identity == identity)
+            } if *column == *column_index && existing_identity.same_row(identity))
         }) {
             let existing_matches_original = match existing {
                 StagedChange::Update {
@@ -171,7 +183,7 @@ impl ChangeSet {
                         column_index: column,
                         identity: existing_identity,
                         ..
-                    } if *column == *column_index && existing_identity == identity)
+                    } if *column == *column_index && existing_identity.same_row(identity))
                 });
                 return;
             }
@@ -202,15 +214,18 @@ impl ChangeSet {
             !matches!(entry, StagedChange::Update {
                 identity: existing_identity,
                 ..
-            } if existing_identity == identity)
+            } if existing_identity.same_row(identity))
                 && !matches!(entry, StagedChange::Delete {
                     identity: existing_identity,
                     ..
-                } if existing_identity == identity)
+                } if existing_identity.same_row(identity))
         });
         self.entries.push(change);
     }
 
+    /// Test-only shorthand: the grid always stages inserts with column types
+    /// through [`Self::stage_insert_typed`] (#587).
+    #[cfg(test)]
     pub fn stage_insert(&mut self, columns: Vec<String>, values: Vec<UiCell>) -> u64 {
         self.stage_insert_typed(columns, Vec::new(), values)
     }
@@ -256,7 +271,7 @@ impl ChangeSet {
                 identity: entry_identity,
                 column_index: column,
                 ..
-            } if entry_identity == identity && *column == column_index)
+            } if entry_identity.same_row(identity) && *column == column_index)
         });
         before != self.entries.len()
     }
@@ -264,8 +279,8 @@ impl ChangeSet {
     pub fn revert_row(&mut self, identity: &RowIdentity) -> bool {
         let before = self.entries.len();
         self.entries.retain(|entry| {
-            !matches!(entry, StagedChange::Update { identity: entry_identity, .. } if entry_identity == identity)
-                && !matches!(entry, StagedChange::Delete { identity: entry_identity, .. } if entry_identity == identity)
+            !matches!(entry, StagedChange::Update { identity: entry_identity, .. } if entry_identity.same_row(identity))
+                && !matches!(entry, StagedChange::Delete { identity: entry_identity, .. } if entry_identity.same_row(identity))
         });
         before != self.entries.len()
     }
@@ -279,7 +294,7 @@ impl ChangeSet {
                 ..
             } = entry
             {
-                if entry_identity == identity && *changed_column == column_index {
+                if entry_identity.same_row(identity) && *changed_column == column_index {
                     *original = new_original.clone();
                 }
             }
@@ -293,14 +308,14 @@ impl ChangeSet {
                 column_index: changed_column,
                 value,
                 ..
-            } if entry_identity == identity && *changed_column == column_index => Some(value.clone()),
+            } if entry_identity.same_row(identity) && *changed_column == column_index => Some(value.clone()),
             _ => None,
         })
     }
 
     pub fn row_deleted(&self, identity: &RowIdentity) -> bool {
         self.entries.iter().any(|entry| {
-            matches!(entry, StagedChange::Delete { identity: entry_identity, .. } if entry_identity == identity)
+            matches!(entry, StagedChange::Delete { identity: entry_identity, .. } if entry_identity.same_row(identity))
         })
     }
 
@@ -334,7 +349,7 @@ impl ChangeSet {
             | StagedChange::Delete {
                 identity: entry_identity,
                 ..
-            } => entry_identity == identity,
+            } => entry_identity.same_row(identity),
             StagedChange::Insert { .. } => false,
         })
     }

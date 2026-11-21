@@ -75,10 +75,7 @@ impl Default for DbProApp {
             palette: PaletteState::default(),
             agent: AgentState::default(),
             task_bridge: TaskBridge::default(),
-            feedback: FeedbackState {
-                runtime_message: "Ready".to_owned(),
-                ..Default::default()
-            },
+            feedback: FeedbackState::with_message("Ready"),
             table: TableEditorState {
                 data: TableDataState::default(),
                 data_query: TableDataQueryState::default(),

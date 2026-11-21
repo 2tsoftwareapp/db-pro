@@ -162,6 +162,10 @@ pub enum UiTableMutation {
         values: Vec<UiCell>,
         pk_columns: Vec<String>,
         pk_values: Vec<UiCell>,
+        /// Column types parallel to `pk_columns` (#587). The WHERE clause has to
+        /// bind the same way the column is declared, otherwise a `text` primary
+        /// key holding a UUID fails with `operator does not exist: text = uuid`.
+        pk_data_types: Vec<String>,
     },
     Delete {
         pk_columns: Vec<String>,

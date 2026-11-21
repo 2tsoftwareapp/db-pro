@@ -48,11 +48,11 @@ pub(super) fn handle_connection_request_failure(
         if operation == Some(PendingConnectionOperation::Test) {
             // Rewrite the placeholder auth stage with the runtime's real
             // reason so the FAIL line explains the failure (#609).
-            let mut report = dialog.diagnostics.take().unwrap_or_else(|| {
-                super::logic::probe_draft_diagnostics(&dialog.draft, false, message)
+            let mut report = dialog.diagnostics().cloned().unwrap_or_else(|| {
+                super::connection::logic::probe_draft_diagnostics(dialog.draft(), false, message)
             });
-            super::logic::mark_diagnostics_auth_failed(&mut report, message);
-            dialog.diagnostics = Some(report);
+            super::connection::logic::mark_diagnostics_auth_failed(&mut report, message);
+            dialog.set_diagnostics(Some(report));
         }
         dialog.set_error(message);
         feedback.set_runtime_message(match operation {

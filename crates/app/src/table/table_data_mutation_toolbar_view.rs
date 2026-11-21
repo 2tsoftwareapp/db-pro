@@ -199,9 +199,7 @@ pub(super) fn draw_failure_banner(
     context: &TableDataMutationToolbarContext<'_>,
     ui: &mut egui::Ui,
 ) -> Option<TableDataMutationToolbarAction> {
-    let Some(failure) = context.failure else {
-        return None;
-    };
+    let failure = context.failure?;
     let is_conflict = failure.code == "CONFLICT";
     let theme = context.theme;
     let accent = if is_conflict { theme.warning } else { theme.danger };

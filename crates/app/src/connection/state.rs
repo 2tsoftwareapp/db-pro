@@ -131,6 +131,13 @@ impl ConnectionDialogState {
         self.diagnostics.as_ref()
     }
 
+    pub(crate) fn set_diagnostics(
+        &mut self,
+        report: Option<db_pro_core::domain::connection_diagnostics::ConnectionDiagnosticsReport>,
+    ) {
+        self.diagnostics = report;
+    }
+
     pub(crate) fn ssh_profiles(&self) -> &[db_pro_core::domain::connection::SshProfile] {
         &self.ssh_profiles
     }

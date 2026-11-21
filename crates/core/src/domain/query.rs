@@ -51,7 +51,7 @@ pub enum QueryParam {
     Json(serde_json::Value),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum CellValue {
     #[serde(rename = "null")]

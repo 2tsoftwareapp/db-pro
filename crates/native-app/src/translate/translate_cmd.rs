@@ -85,7 +85,7 @@ pub(crate) fn draft_to_domain(
                 }
             },
             query_timeout_ms: 30_000,
-            db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
+            max_rows: db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
             color: None,
             tags: {
                 let mut tags: Vec<String> = draft
@@ -410,7 +410,7 @@ pub(crate) fn translate_table_command(command: UiCommand) -> Option<RuntimeComma
 fn map_typed_cells(
     values: Vec<UiCell>,
     data_types: &[String],
-) -> Option<Vec<db_pro_core::domain::value::CellValue>> {
+) -> Option<Vec<db_pro_core::domain::query::CellValue>> {
     if data_types.len() != values.len() {
         return values.into_iter().map(ui_cell_to_domain).collect();
     }

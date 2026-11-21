@@ -57,7 +57,7 @@
                     ..Default::default()
                 },
                 data_query: TableDataQueryState {
-                    result: Some(row_result("local server value")),
+                    result: Some(std::rc::Rc::new(row_result("local server value"))),
                     row_reload_request: Some(RequestId(9)),
                     row_reload_identity: Some(RowIdentity {
                         original_pk_columns: vec!["id".to_owned()],

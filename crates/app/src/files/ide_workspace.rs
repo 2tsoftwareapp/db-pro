@@ -4,7 +4,7 @@
 // allow: IDE workspace operations remain a persisted contract while shell adoption is incremental.
 #![allow(dead_code)]
 
-use super::ide_workspace_scan::{flatten_index, index_diagnostics, scan_directory, ScannedRoot};
+use super::ide_workspace_scan::{self, flatten_index, index_diagnostics, scan_directory, ScannedRoot};
 pub(crate) use super::ide_workspace_types::*;
 
 use std::io::Write;

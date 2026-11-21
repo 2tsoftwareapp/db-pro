@@ -47,7 +47,17 @@ pub(super) fn format_trigger_ddl(trigger: &Trigger) -> String {
     // `UPDATE OF col`, `REFERENCING` and `DEFERRABLE`, which silently turned a
     // row-level trigger into a statement-level one (#594).
     if trigger.is_complete_definition() {
-        return format!("{};\n", trigger.definition.trim().trim_end_matches(';'));
+        let trigger_stmt = format!("{};\n", trigger.definition.trim().trim_end_matches(';'));
+        // The trigger references its function, so replaying it needs the
+        // function definition ahead of it even when the trigger text itself is
+        // complete (#594).
+        if trigger.function_def.trim().is_empty() {
+            return trigger_stmt;
+        }
+        return format!(
+            "{};\n\n{trigger_stmt}",
+            trigger.function_def.trim().trim_end_matches(';')
+        );
     }
 
     let dialect = DriverDialect::new(DriverType::Postgres);
@@ -67,7 +77,7 @@ pub(super) fn format_trigger_ddl(trigger: &Trigger) -> String {
         // added here — without it the function and the CREATE TRIGGER that
         // followed it were one syntactically invalid statement (#594).
         format!(
-            "{}\n\n{}",
+            "{};\n\n{}",
             trigger.function_def.trim().trim_end_matches(';'),
             trigger_statement_with_semicolon(&trigger_stmt)
         )

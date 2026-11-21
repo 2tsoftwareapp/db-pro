@@ -4,6 +4,7 @@
 //! Foreign-data-wrapper presentation and typed user intents.
 use super::super::fdw_state::FdwState;
 use super::super::*;
+use db_pro_ui::components::common::{fmt_opt, format_shown_total};
 
 /// Row caps for the FDW inventory lists (#569/#583).
 const FDW_WRAPPER_CAP: usize = 20;

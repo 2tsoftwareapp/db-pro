@@ -75,6 +75,12 @@ pub(super) fn escape_delimited_field_with(
     safety: DelimitedSafety,
 ) -> String {
     let value = db_pro_core::application::guard_csv_field_with(value, safety);
+    if safety == DelimitedSafety::Raw {
+        // #593: the clipboard path must round-trip byte for byte. RFC-4180
+        // quoting would double every `"` in a JSON/HTML-looking value, so a
+        // paste into an editor, chat or `psql` no longer matches the cell.
+        return value.into_owned();
+    }
     if value.contains(delimiter) || value.contains('"') || value.contains('\n') || value.contains('\r') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {

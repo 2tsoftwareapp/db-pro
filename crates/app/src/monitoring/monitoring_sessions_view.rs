@@ -1,6 +1,7 @@
 //! Monitoring session presentation and user intents.
 
 use super::*;
+use db_pro_ui::components::common::{fmt_opt, fmt_opt_duration_millis};
 
 /// Idle-in-transaction rows painted per frame (#569).
 const IDLE_XACT_CAP: usize = 20;

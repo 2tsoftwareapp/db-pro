@@ -1,4 +1,5 @@
 use super::*;
+use db_pro_ui::components::common::fmt_opt;
 
 /// Hits kept from one workspace search (#579).
 const SEARCH_HIT_LIMIT: usize = 100;
@@ -358,11 +359,6 @@ impl WorkspaceFilesState {
         }
     }
 
-    /// True while a workspace read runs (#579).
-    pub(super) fn read_task_in_flight(&self) -> bool {
-        self.read_task.is_some()
-    }
-
     pub(super) fn request_replace_all(&mut self, feedback: &mut FeedbackState) {
         self.pending_replace_all = true;
         feedback.set_runtime_message(t!("workspace.confirm_replace_all"));
@@ -484,7 +480,7 @@ impl WorkspaceFilesState {
 
     /// Drain streamed task output (#579). Returns the exit code once the task
     /// has finished; `last_task` is published at the same moment.
-    pub(super) fn poll_task(&mut self) -> Option<Option<i32>> {
+    pub(super) fn poll_task(&mut self, feedback: &mut FeedbackState) -> Option<Option<i32>> {
         let code = self.drain_task_events()?;
         let duration_ms = self.task.as_ref().map_or(0, |task| task.elapsed_ms());
         let command = self.task.as_ref().map_or_else(String::new, |task| task.command.clone());
@@ -496,6 +492,15 @@ impl WorkspaceFilesState {
             stderr: String::new(),
             duration_ms,
         });
+        // Whoever drains the worker publishes the outcome: the status bar reports
+        // the exit code the moment it is known (#569: `{:?}` printed `Some(0)`).
+        if let Some(result) = self.ide_workspace.last_task.as_ref() {
+            feedback.set_runtime_message(t!(
+                "workspace.task_exit",
+                code = fmt_opt(result.exit_code).as_str(),
+                ms = result.duration_ms
+            ));
+        }
         Some(code)
     }
 

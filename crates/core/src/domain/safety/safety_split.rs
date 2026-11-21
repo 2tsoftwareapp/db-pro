@@ -155,7 +155,7 @@ fn classify_create_statement(statement: &str, tokens: &[SqlToken], driver: Drive
     }
 
     let mut words = words.into_iter();
-    if !words.next().is_some_and(|word| word == "CREATE") {
+    if words.next().is_none_or(|word| word != "CREATE") {
         return SplitKind::None;
     }
     for word in words {
@@ -203,7 +203,6 @@ fn last_block_depth(statement: &str, tokens: &[SqlToken], kind: SplitKind) -> Bl
             index += 1;
             continue;
         }
-        let word = &statement[token.start..token.end];
         if depth == 0 {
             if token_is_word(statement, token, "BEGIN")
                 && (kind == SplitKind::Trigger

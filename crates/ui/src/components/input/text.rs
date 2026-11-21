@@ -229,7 +229,7 @@ impl<'a> Input<'a> {
                 edit_response.request_focus();
             }
             let frame_rect = frame_output.response.rect;
-            super::super::input::handler::register_text_field(ui.ctx(), edit_response.id, frame_rect);
+            super::super::handler::register_text_field(ui.ctx(), edit_response.id, frame_rect);
             let info_label = super::super::handler::accessible_label(
                 self.access_label.as_deref(),
                 self.label.as_deref(),

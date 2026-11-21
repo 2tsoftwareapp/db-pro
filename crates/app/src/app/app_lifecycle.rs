@@ -175,7 +175,7 @@ impl DbProApp {
         });
     }
 
-    fn prepare_frame(&mut self, ctx: &egui::Context) {
+    pub(super) fn prepare_frame(&mut self, ctx: &egui::Context) {
         // #573: the window is no longer re-maximized on the first frames. eframe
         // restores the persisted frame (size *and* position); a viewport command
         // issued here overrode it, so a resized window came back maximized.
@@ -240,7 +240,7 @@ impl DbProApp {
         self.handle_shortcuts(ctx);
     }
 
-    fn draw_shell(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn draw_shell(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         // eframe creates the root Ui before App::logic updates the global style.
         // Refresh its snapshot so panels inherit this frame's selected theme.

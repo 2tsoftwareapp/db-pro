@@ -97,8 +97,23 @@ async fn run_introspection_once(pool: &sqlx::PgPool) -> Result<IntrospectResult,
 }
 
 /// (schema, table, column) sets marking primary-key and single-column-unique
-/// membership, derived from the already-fetched catalogs.
 type ColumnRef = (String, String, String);
+
+/// One row of the column catalog: (schema, table, column, data_type, ordinal, nullable,
+/// default, is_identity, is_generated, collation, enum_labels).
+type RawColumn = (
+    String,
+    String,
+    String,
+    String,
+    usize,
+    bool,
+    Option<String>,
+    bool,
+    bool,
+    Option<String>,
+    Vec<String>,
+);
 
 fn column_flag_sets(primary_keys: &[PrimaryKey], indexes: &[Index]) -> (HashSet<ColumnRef>, HashSet<ColumnRef>) {
     let pk_column_set = primary_keys
@@ -229,7 +244,8 @@ async fn introspect_tables(pool: &sqlx::PgPool) -> Result<Vec<Table>, DbError> {
     .await
     .map_err(crate::error::from_sqlx)?;
 
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .map(|row| {
             let name: String = row.get("table_name");
             let schema: String = row.get("schema_name");
@@ -243,7 +259,7 @@ async fn introspect_tables(pool: &sqlx::PgPool) -> Result<Vec<Table>, DbError> {
                     .and_then(|total| u64::try_from(total).ok())
             } else {
                 let raw: f32 = row.get("row_count");
-                (raw >= 0.0).then(|| raw as u64)
+                (raw >= 0.0).then_some(raw as u64)
             };
             Table {
                 name,
@@ -251,7 +267,7 @@ async fn introspect_tables(pool: &sqlx::PgPool) -> Result<Vec<Table>, DbError> {
                 row_count,
             }
         })
-        .collect()
+        .collect())
 }
 
 // cc-scan:allow COMPLEXITY,LINE_TOO_LONG,LONG_FUNCTION — one catalog query plus its row mapping

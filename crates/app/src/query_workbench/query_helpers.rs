@@ -219,6 +219,32 @@ pub(crate) fn format_query_document(doc: &mut QueryDocument, dialect: SqlDialect
 
 /// No selection: format the entire buffer and carry the caret to the same
 /// line/column it had before (clamped), instead of silently doing nothing (#605).
+/// The identifier or keyword the caret sits in (or immediately before).
+fn word_at(text: &str, offset: usize) -> Option<String> {
+    let rest = text.get(offset..)?;
+    let start = rest.find(|ch: char| ch.is_alphanumeric() || ch == '_')?;
+    let word: String = rest[start..]
+        .chars()
+        .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+        .collect();
+    (!word.is_empty()).then_some(word)
+}
+
+/// First ASCII-case-insensitive occurrence of `token` in `haystack`.
+fn find_token_ci(haystack: &str, token: &str) -> Option<usize> {
+    if token.is_empty() || haystack.len() < token.len() {
+        return None;
+    }
+    haystack
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .find(|&offset| {
+            haystack
+                .get(offset..offset + token.len())
+                .is_some_and(|slice| slice.eq_ignore_ascii_case(token))
+        })
+}
+
 fn format_whole_document(doc: &mut QueryDocument, dialect: SqlDialect) -> bool {
     let original_text = doc.buffer.slice(0, doc.buffer.len_bytes()).to_owned();
     let trimmed = original_text.trim();
@@ -227,6 +253,32 @@ fn format_whole_document(doc: &mut QueryDocument, dialect: SqlDialect) -> bool {
         return false;
     }
 
+    // Formatting collapses the document into many lines, so the original line
+    // index no longer identifies anything (#605). Anchor the caret on the word
+    // it was in, and fall back to the old line/column mapping when the word has
+    // no counterpart in the formatted text.
+    if let Some(token) = word_at(&original_text, doc.cursor.offset) {
+        if let Some(offset) = find_token_ci(&formatted_text, &token) {
+            doc.buffer.replace_with_snapshot(
+                0,
+                doc.buffer.len_bytes(),
+                &formatted_text,
+                EditorSnapshot {
+                    cursor_offset: doc.cursor.offset,
+                    anchor_offset: doc.selection.anchor,
+                },
+                EditorSnapshot {
+                    cursor_offset: offset,
+                    anchor_offset: offset,
+                },
+            );
+            doc.cursor.set_offset(&doc.buffer, offset);
+            doc.selection = SelectionRange::new(offset, offset);
+            close_completion(doc);
+            doc.invalidate_prediction();
+            return true;
+        }
+    }
     let (line, col) = doc.buffer.offset_to_line_col(doc.cursor.offset);
     let mut cursor_after = formatted_text.len();
     let mut byte_acc = 0usize;

@@ -2,6 +2,7 @@
 use super::super::replication_state::ReplicationState;
 use super::super::*;
 use crate::components::dialog::Dialog;
+use db_pro_ui::components::common::{fmt_opt, format_shown_total};
 
 /// Maximum rows painted per replication list (#569/#583).
 const REPLICATION_ROW_CAP: usize = 40;

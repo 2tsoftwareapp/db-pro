@@ -158,13 +158,13 @@ impl CachedSqlTokens {
         }
 
         let mut spliced: Vec<SyntaxToken> = Vec::with_capacity(self.tokens.len());
-        for token in &self.tokens {
+        for token in self.tokens.iter() {
             if token.range.1 <= region_start {
                 spliced.push(token.clone());
             }
         }
         spliced.extend(fresh);
-        for token in &self.tokens {
+        for token in self.tokens.iter() {
             if token.range.0 >= region_end_old {
                 let Some(shifted_start) = shift_offset(token.range.0, delta) else {
                     return false;

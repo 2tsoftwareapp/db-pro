@@ -581,7 +581,10 @@ fn ime_preedit_tracks_the_composition_string() {
     // showed nothing at all until commit.
     use super::{ImePreedit, Id};
 
-    let event = egui::ImeEvent::Preedit("tiếng Việ".to_owned(), Some((3, 6)));
+    let event = egui::ImeEvent::Preedit {
+        text: "tiếng Việ".to_owned(),
+        active_range_chars: Some(3..6),
+    };
     let preedit = ImePreedit::from_event(&event).expect("preedit events are captured");
     assert_eq!(preedit.text, "tiếng Việ");
     assert!(!preedit.is_empty());
@@ -594,12 +597,16 @@ fn ime_preedit_tracks_the_composition_string() {
 }
 
 #[test]
+#[allow(deprecated)] // egui 0.36 deprecates `Enabled`; the ignore path still has to be covered.
 fn commit_and_cancel_clear_the_preedit() {
     use super::ImePreedit;
 
     assert!(ImePreedit::from_event(&egui::ImeEvent::Commit("a".to_owned())).is_none());
     assert!(ImePreedit::from_event(&egui::ImeEvent::Enabled).is_none());
-    let cleared = ImePreedit::from_event(&egui::ImeEvent::Preedit(String::new(), None))
+    let cleared = ImePreedit::from_event(&egui::ImeEvent::Preedit {
+        text: String::new(),
+        active_range_chars: None,
+    })
         .expect("an empty preedit is still a preedit event");
     assert!(cleared.is_empty());
     assert_eq!(cleared.around_cursor(), (String::new(), String::new()));
@@ -621,10 +628,10 @@ fn render_preedit_then_read(preedit: &str) -> (String, super::ImePreedit) {
         &ctx,
         egui::RawInput {
             focused: true,
-            events: vec![egui::Event::Ime(egui::ImeEvent::Preedit(
-                preedit.to_owned(),
-                Some((0, preedit.chars().count())),
-            ))],
+            events: vec![egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: preedit.to_owned(),
+                active_range_chars: Some(0..preedit.chars().count()),
+            })],
             ..Default::default()
         },
         |ctx| {

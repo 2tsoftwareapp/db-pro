@@ -43,6 +43,9 @@ fn config(database: &str) -> ConnectionConfig {
         favorite: false,
         environment: Default::default(),
         readonly: false,
+        // The harness owns a fresh scratch directory, so the file is expected to
+        // be created on first connect (#597 made that an explicit opt-in).
+        create_if_missing: true,
     }
 }
 

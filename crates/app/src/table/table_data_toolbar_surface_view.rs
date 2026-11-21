@@ -135,9 +135,7 @@ impl TableDataToolbarContext<'_> {
     }
 
     fn draw_failure_banner(&mut self, ui: &mut egui::Ui) -> Option<TableDataToolbarAction> {
-        if self.failure.is_none() {
-            return None;
-        }
+        self.failure?;
         ui.add_space(SPACE_XS);
         let context = table_data_mutation_toolbar_view::TableDataMutationToolbarContext {
             theme: self.theme,

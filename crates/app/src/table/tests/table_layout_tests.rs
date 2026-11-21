@@ -62,13 +62,16 @@ fn sqlite_table_app() -> DbProApp {
     app
 }
 
-const SCREEN: egui::Rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 752.0));
+fn screen_rect() -> egui::Rect {
+    // `Rect::from_min_size` is not a `const fn`, so this cannot stay a `const`.
+    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 752.0))
+}
 
 fn render_shell(app: &mut DbProApp, ctx: &egui::Context) -> egui::FullOutput {
     crate::test_frame::frame(
         ctx,
         egui::RawInput {
-            screen_rect: Some(SCREEN),
+            screen_rect: Some(screen_rect()),
             ..Default::default()
         },
         |ui| {
@@ -89,7 +92,7 @@ fn statusbar_toggle_bottom(output: &egui::FullOutput) -> f64 {
         .iter()
         .find(|(_, node)| node.label() == Some("Toggle output panel"))
         .and_then(|(_, node)| node.bounds())
-        .map(|bounds| (bounds.y1 - f64::from(SCREEN.bottom())).abs())
+        .map(|bounds| (bounds.y1 - f64::from(screen_rect().bottom())).abs())
         .expect("status bar output toggle is labelled")
 }
 

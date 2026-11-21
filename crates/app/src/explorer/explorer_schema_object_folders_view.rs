@@ -113,7 +113,7 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 icon_color: theme.success,
                 label: &views_label,
                 count,
-                empty_label: Some(empty_hint.as_str()),
+                empty_label: Some(empty_hint.as_ref()),
             },
             |ui| {
                 let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, view| {
@@ -157,7 +157,7 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 icon_color: theme.code_type,
                 label: &functions_label,
                 count,
-                empty_label: Some(empty_hint.as_str()),
+                empty_label: Some(empty_hint.as_ref()),
             },
             |ui| {
                 let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, function| {
@@ -200,7 +200,7 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 icon_color: theme.warning,
                 label: &triggers_label,
                 count,
-                empty_label: Some(empty_hint.as_str()),
+                empty_label: Some(empty_hint.as_ref()),
             },
             |ui| {
                 let rows = self.draw_culled_rows(ui, visible.iter().copied(), |ui, trigger| {
@@ -273,12 +273,12 @@ impl<'a> SchemaObjectFoldersView<'a> {
             icon: Icon::Eye,
             icon_color: self.theme.success,
             is_selected,
-            query_label: Some(query_label.as_str()),
+            query_label: Some(query_label.as_ref()),
             query_icon: Icon::Play,
             open_label: &t!("explorer.open_view"),
             open_icon: Icon::Eye,
-            modify_label: Some(modify_label.as_str()),
-            drop_label: Some(drop_label.as_str()),
+            modify_label: Some(modify_label.as_ref()),
+            drop_label: Some(drop_label.as_ref()),
             copy_label: &t!("explorer.copy_view_name"),
             trigger_toggle_label: None,
             trigger_toggle_unavailable_reason: None,
@@ -337,7 +337,7 @@ impl<'a> SchemaObjectFoldersView<'a> {
                 icon,
                 icon_color: self.theme.code_type,
                 is_selected,
-                query_label: Some(call_label.as_str()),
+                query_label: Some(call_label.as_ref()),
                 query_icon: Icon::Play,
                 open_label: &t!("explorer.open_routine"),
                 open_icon: Icon::Code2,
@@ -392,12 +392,13 @@ impl<'a> SchemaObjectFoldersView<'a> {
             open_label: &t!("explorer.view_trigger"),
             open_icon: Icon::Eye,
             modify_label: None,
-            drop_label: Some(drop_trigger_label.as_str()),
+            drop_label: Some(drop_trigger_label.as_ref()),
             copy_label: &t!("explorer.copy_trigger_name"),
             trigger_toggle_label: trigger_toggle_menu_label(
                 trigger.enabled,
                 self.trigger_toggle_unavailable_reason.is_none(),
-            ),
+            )
+            .as_deref(),
             trigger_toggle_unavailable_reason: self.trigger_toggle_unavailable_reason.as_deref(),
         }
         .draw(ui);

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::domain::connection::ConnectionHandle;
+use crate::domain::safety::effective_statement_keyword;
 use crate::domain::query::{CellValue, ColumnMeta, Row};
 use crate::ports::{
     MockConnectionRepository, MockDbConnector, MockIntrospectionCache, MockQueryHistoryRepository,
@@ -741,7 +742,10 @@ async fn execute_multi_rejects_malformed_transaction_query_result() {
 
     let svc = QueryService::new(
         Box::new(connector),
-        Box::new(MockQueryHistoryRepository::new()),
+        Box::new({ let mut history = MockQueryHistoryRepository::new();
+            // #600: the statement ran, so its failure belongs in history.
+            history.expect_save().times(1).returning(|_, _, _, _, _, _| Ok(()));
+            history }),
         Box::new(MockSavedQueryRepository::new()),
         Box::new(MockRunConfigRepository::new()),
         Arc::clone(&registry),
@@ -781,7 +785,10 @@ async fn execute_multi_partial_failure_preserves_earlier_results() {
 
     let svc = QueryService::new(
         Box::new(connector),
-        Box::new(MockQueryHistoryRepository::new()),
+        Box::new({ let mut history = MockQueryHistoryRepository::new();
+            // #600: the statement ran, so its failure belongs in history.
+            history.expect_save().times(1).returning(|_, _, _, _, _, _| Ok(()));
+            history }),
         Box::new(MockSavedQueryRepository::new()),
         Box::new(MockRunConfigRepository::new()),
         Arc::clone(&registry),
@@ -829,7 +836,10 @@ async fn execute_multi_commit_failure_reports_unknown_outcome() {
 
     let svc = QueryService::new(
         Box::new(connector),
-        Box::new(MockQueryHistoryRepository::new()),
+        Box::new({ let mut history = MockQueryHistoryRepository::new();
+            // #600: the statement ran, so its failure belongs in history.
+            history.expect_save().times(1).returning(|_, _, _, _, _, _| Ok(()));
+            history }),
         Box::new(MockSavedQueryRepository::new()),
         Box::new(MockRunConfigRepository::new()),
         Arc::clone(&registry),

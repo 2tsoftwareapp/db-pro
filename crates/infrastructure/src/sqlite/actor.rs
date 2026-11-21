@@ -989,7 +989,10 @@ impl SqliteActor {
 /// statements and then its `BEGIN … END` tail, which completes the body. A
 /// string without a body is returned unchanged.
 fn expand_batch_units(statement: &str) -> Vec<String> {
-    db_pro_core::domain::safety::split_statement_body_for_driver(
+    // The shared splitter knows that a `BEGIN … END` trigger body is one
+    // statement (#586); splitting there produced a stray `END` unit that the
+    // transaction-control guard then refused.
+    db_pro_core::domain::safety::split_statements_for_driver(
         statement,
         db_pro_core::domain::connection::DriverType::SQLite,
     )

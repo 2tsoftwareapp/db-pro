@@ -4034,10 +4034,7 @@ fn problems_panel_aggregates_open_document_diagnostics_and_navigates() {
 #[test]
 fn diagnostics_summary_redacts_runtime_errors_and_lists_mysql() {
     let mut app = DbProApp {
-        feedback: FeedbackState {
-            runtime_message: "connection failed password=hunter2".to_owned(),
-            ..Default::default()
-        },
+        feedback: FeedbackState::with_message("connection failed password=hunter2"),
         ..DbProApp::default()
     };
     app.connection
@@ -4399,7 +4396,7 @@ fn closing_workspace_tab_clears_its_resource_and_requests() {
             },
             data_query: TableDataQueryState {
                 request: Some(crate::RequestId(3)),
-                result: Some(result()),
+                result: Some(std::rc::Rc::new(result())),
                 filters: vec![UiTableDataFilter {
                     column: "id".to_owned(),
                     data_type: "integer".to_owned(),
@@ -4623,9 +4620,11 @@ fn test_format_cell_csv_and_cell_to_json() {
         result_grid_export::format_cell_csv(&UiCell::Number("42.50".to_owned())),
         "42.50"
     );
+    // #593: the clipboard path is raw — no RFC-4180 quoting, so a paste into an
+    // editor or `psql` reproduces the cell exactly.
     assert_eq!(
         result_grid_export::format_cell_csv(&UiCell::Text("Hello, \"World\"".to_owned())),
-        "\"Hello, \"\"World\"\"\""
+        "Hello, \"World\""
     );
 
     assert_eq!(
@@ -6551,7 +6550,7 @@ fn test_apply_mutation_failure_preserves_changeset_and_focuses_failed_cell() {
             },
             state: TableState { ..Default::default() },
             data_query: TableDataQueryState {
-                result: Some(UiQueryResult {
+                result: Some(std::rc::Rc::new(UiQueryResult {
                     columns: vec![
                         crate::UiColumn {
                             name: "id".to_owned(),
@@ -6571,7 +6570,7 @@ fn test_apply_mutation_failure_preserves_changeset_and_focuses_failed_cell() {
                     ],
                     row_count: 3,
                     duration_ms: 0,
-                }),
+                })),
                 ..Default::default()
             },
             ..Default::default()

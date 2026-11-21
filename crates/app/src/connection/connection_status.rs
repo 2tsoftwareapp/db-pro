@@ -158,13 +158,17 @@ pub(super) fn runtime_status(
     current_activity: super::app_types::Activity,
 ) -> Option<(String, Color32)> {
     let message = feedback.runtime_message_for_display(current_activity);
-    if message.trim().is_empty() {
-        None
-    } else if has_runtime_error(feedback) {
-        Some((message.to_owned(), theme.danger))
-    } else {
-        Some((message.to_owned(), theme.text_secondary))
+    if !message.trim().is_empty() {
+        return if has_runtime_error(feedback) {
+            Some((message.to_owned(), theme.danger))
+        } else {
+            Some((message.to_owned(), theme.text_secondary))
+        };
     }
+    // #571: the status line holds one message, so routine chatter used to erase
+    // the failure that preceded it. Fall back to the newest retained error.
+    let retained = feedback.last_error()?;
+    (!retained.message.trim().is_empty()).then(|| (retained.message.clone(), theme.danger))
 }
 
 pub(super) fn statusbar_state(

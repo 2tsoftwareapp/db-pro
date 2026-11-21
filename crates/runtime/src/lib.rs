@@ -454,13 +454,14 @@ fn db_config(
         ssl_client_cert_path: None,
         ssl_client_key_path: None,
         query_timeout_ms: 30_000,
-        db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
+        max_rows: db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
         color: None,
         tags: Vec::new(),
         group: None,
         favorite: false,
         environment: Default::default(),
         readonly: false,
+        create_if_missing: false,
     }
 }
 

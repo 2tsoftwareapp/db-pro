@@ -345,7 +345,7 @@ async fn execute_query_returns_a_row_from_a_sqlite_file() {
                 favorite: false,
                 environment: Default::default(),
                 readonly: false,
-                create_if_missing: false,
+                create_if_missing: true, // the test owns a fresh scratch file (#597)
 },
             "",
         )

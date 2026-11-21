@@ -19,14 +19,14 @@ pub(crate) fn accessible_label<'a>(
 #[path = "tests/handler_tests.rs"]
 mod tests;
 
-//! Pre-pass focus resolution for text fields (#609).
-//!
-//! egui applies `request_focus` only from the next pass onwards, so a pointer
-//! press on a text field and the characters typed in the same frame would be
-//! delivered to whichever field was focused when the frame started. The
-//! pre-pass below runs before any widget is laid out and hands focus to the
-//! field under the press, using the rect registry the inputs publish on each
-//! drawn frame.
+// Pre-pass focus resolution for text fields (#609).
+//
+// egui applies `request_focus` only from the next pass onwards, so a pointer
+// press on a text field and the characters typed in the same frame would be
+// delivered to whichever field was focused when the frame started. The
+// pre-pass below runs before any widget is laid out and hands focus to the
+// field under the press, using the rect registry the inputs publish on each
+// drawn frame.
 
 /// The id the rect registry lives under in `ctx.data`.
 pub const TEXT_FIELD_REGISTRY_ID: &str = "dbpro.text_field_registry";

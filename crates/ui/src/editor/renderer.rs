@@ -108,9 +108,14 @@ struct ImePreedit {
 impl ImePreedit {
     fn from_event(event: &egui::ImeEvent) -> Option<Self> {
         match event {
-            egui::ImeEvent::Preedit(text, cursor_range) => Some(Self {
+            egui::ImeEvent::Preedit { text, active_range_chars } => Some(Self {
                 text: text.clone(),
-                cursor_range: cursor_range.map(|(start, end)| (start.min(end), start.max(end))),
+                // egui 0.36 renamed the composition span to `active_range_chars`
+                // and made it a `Range`; keep the ordering guard so a reversed
+                // range still paints left-to-right.
+                cursor_range: active_range_chars
+                    .as_ref()
+                    .map(|range| (range.start.min(range.end), range.start.max(range.end))),
             }),
             _ => None,
         }
@@ -1076,7 +1081,8 @@ impl<'a> SqlEditor<'a> {
             // — only an `Arc` reference (#581).
             return (highlighter, cache.shared(buffer, self.dialect));
         }
-        (highlighter, highlighter.tokenize(self.buffer.text()).into())
+        let tokens = highlighter.tokenize(self.buffer.text()).into();
+        (highlighter, tokens)
     }
 
     /// Scroll just enough that the caret stays inside the viewport, then persist.

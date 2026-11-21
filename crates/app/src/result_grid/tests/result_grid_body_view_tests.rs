@@ -26,7 +26,8 @@ fn visible_window_covers_offscreen_rows_and_stops_after_the_last() {
     let last = grid_last_visible_row(280.0 + 10.0 * ROW_HEIGHT, ROW_HEIGHT, 10_000);
     assert_eq!(first, 10);
     assert_eq!(last, 21);
-    assert_eq!(grid_last_visible_row(0.0, ROW_HEIGHT, 3), 3);
+    // A bottom offset past the end still stops at the last row.
+    assert_eq!(grid_last_visible_row(1_000.0, ROW_HEIGHT, 3), 3);
 }
 
 #[test]

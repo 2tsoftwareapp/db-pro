@@ -577,7 +577,9 @@ fn format_trigger_ddl_includes_function_def_when_present() {
     let func_pos = ddl.find("CREATE FUNCTION").unwrap();
     let trigger_pos = ddl.find("CREATE TRIGGER").unwrap();
     assert!(func_pos < trigger_pos, "function_def must precede CREATE TRIGGER");
-    assert_eq!(ddl.matches(';').count(), 2, "{ddl}");
+    // Two semicolons inside `BEGIN RETURN NEW; END;`, plus one terminator for
+    // the function and one for the trigger.
+    assert_eq!(ddl.matches(';').count(), 4, "{ddl}");
 }
 
 #[test]
@@ -616,8 +618,9 @@ fn format_trigger_ddl_adds_the_missing_semicolon_after_a_function_body() {
     };
     let ddl = format_trigger_ddl(&trigger);
     assert!(ddl.contains("LANGUAGE plpgsql"), "{ddl}");
-    // `;` closes the function, `;` closes the rebuilt CREATE TRIGGER.
-    assert_eq!(ddl.matches(';').count(), 2, "{ddl}");
+    // Two semicolons inside the body, plus a terminator for the function and one
+    // for the rebuilt CREATE TRIGGER.
+    assert_eq!(ddl.matches(';').count(), 4, "{ddl}");
     assert!(ddl.trim_end().ends_with(';'), "{ddl}");
 }
 
