@@ -257,15 +257,36 @@ fn is_formula_like(value: &str) -> bool {
     }
     // `=` and `@` always open an expression; tab/CR/LF can shift a cell into
     // formula position. `+`/`-` are only interesting when followed by more.
-    matches!(first, '=' | '@' | '\t' | '\r' | '\n')
-        || value.chars().nth(1).is_some_and(|next| !next.is_whitespace())
+    if matches!(first, '=' | '\t' | '\r' | '\n') {
+        return true;
+    }
+    // `@`, `+` and `-` only open an expression when a number, `(` or a function
+    // call follows: `-1+1`, `+SUM(A1)` and `@SUM(1)` are formulas, while `-`,
+    // `-abc` and `@user` are plain text (#593).
+    value
+        .chars()
+        .nth(1)
+        .is_some_and(|next| next.is_ascii_digit() || next == '(' || (next.is_alphabetic() && value.contains('(')))
 }
 
 /// Digits, spaces and the punctuation a human writes in a phone number (#593).
 fn is_phone_like(value: &str) -> bool {
-    value
-        .chars()
-        .all(|ch| ch.is_ascii_digit() || matches!(ch, '+' | '-' | ' ' | '(' | ')' | '.'))
+    // One leading sign at most: `+84 912 345 678` is a phone number, but
+    // `-1+1` carries two signs and is an expression (#593).
+    let mut seen_sign = false;
+    let mut has_digit = false;
+    let allowed = value.chars().all(|ch| {
+        if ch.is_ascii_digit() {
+            has_digit = true;
+            return true;
+        }
+        if matches!(ch, '+' | '-') && !seen_sign {
+            seen_sign = true;
+            return true;
+        }
+        matches!(ch, ' ' | '(' | ')' | '.')
+    });
+    allowed && has_digit
 }
 
 #[cfg(test)]

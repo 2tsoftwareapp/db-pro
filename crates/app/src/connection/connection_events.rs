@@ -18,9 +18,19 @@ pub(super) fn handle_connection_request_failure(
 
     let operation = lifecycle.pending_operation();
     lifecycle.clear_pending_request();
-    let connection_id = lifecycle
-        .take_pending_connection_id()
-        .or_else(|| lifecycle.active_connection_id().map(str::to_owned));
+    let is_dialog_operation = matches!(
+        operation,
+        Some(PendingConnectionOperation::Test) | Some(PendingConnectionOperation::Save)
+    );
+    // Test/Save failures belong to the draft being edited in the dialog, not to
+    // whatever connection is currently active — never fall back to the active
+    // connection for those operations (#602).
+    let pending_id = lifecycle.take_pending_connection_id();
+    let connection_id = if is_dialog_operation {
+        pending_id
+    } else {
+        pending_id.or_else(|| lifecycle.active_connection_id().map(str::to_owned))
+    };
     let is_delete = operation == Some(PendingConnectionOperation::Delete);
     if is_delete {
         let formatted = format!("Delete failed · {message}");
@@ -30,13 +40,26 @@ pub(super) fn handle_connection_request_failure(
         if let Some(connection_id) = connection_id {
             lifecycle.record_connection_failure(connection_id, message.to_owned());
         }
-        if !dialog.is_open() {
+        if !is_dialog_operation && !dialog.is_open() {
             lifecycle.set_connected(false);
             schema_explorer.schema_request = None;
             schema_explorer.schema_error = None;
         }
+        if operation == Some(PendingConnectionOperation::Test) {
+            // Rewrite the placeholder auth stage with the runtime's real
+            // reason so the FAIL line explains the failure (#609).
+            let mut report = dialog.diagnostics().cloned().unwrap_or_else(|| {
+                super::connection::logic::probe_draft_diagnostics(dialog.draft(), false, message)
+            });
+            super::connection::logic::mark_diagnostics_auth_failed(&mut report, message);
+            dialog.set_diagnostics(Some(report));
+        }
         dialog.set_error(message);
-        feedback.set_runtime_message(format!("Connection failed · {message}"));
+        feedback.set_runtime_message(match operation {
+            Some(PendingConnectionOperation::Test) => format!("Connection test failed · {message}"),
+            Some(PendingConnectionOperation::Save) => format!("Save failed · {message}"),
+            _ => format!("Connection failed · {message}"),
+        });
     }
     true
 }
@@ -83,6 +106,7 @@ pub(super) fn on_connected(
     lifecycle.set_active_connection_id(Some(connection_id.clone()));
     lifecycle.set_connected(true);
     lifecycle.clear_connection_error(&connection_id);
+    lifecycle.note_session_opened(&connection_id);
     feedback.set_runtime_message("Connection established");
     Some(connection_id)
 }

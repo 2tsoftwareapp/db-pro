@@ -38,7 +38,7 @@ fn clamp_range_is_always_ordered() {
 
 #[test]
 fn maximized_dock_keeps_an_editor_strip() {
-    let available = 800.0;
+    let available: f32 = 800.0;
     let maximized = (available - 80.0).max(output_dock_min_height(available));
     assert!(maximized <= available - 80.0 + 0.001);
     assert!(available - maximized >= 80.0 - 0.001);

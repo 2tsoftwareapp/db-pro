@@ -24,6 +24,7 @@ fn base_config() -> ConnectionConfig {
         favorite: false,
         environment: ConnectionEnvironment::Development,
         readonly: false,
+        create_if_missing: false,
     }
 }
 

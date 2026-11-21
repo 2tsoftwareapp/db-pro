@@ -244,7 +244,15 @@ fn group_changes(changes: &[StagedChange]) -> Vec<ChangeGroup> {
         };
         if let Some(group) = groups
             .iter_mut()
-            .find(|group: &&mut ChangeGroup| group.identity == identity && group.local_id == local_id)
+            .find(|group: &&mut ChangeGroup| {
+                let same_row = match (&group.identity, &identity) {
+                    (Some(group_identity), Some(entry_identity)) => group_identity.same_row(entry_identity),
+                    // Inserts carry no row identity; `local_id` groups them.
+                    (None, None) => true,
+                    _ => false,
+                };
+                same_row && group.local_id == local_id
+            })
         {
             group.changes.push(entry.clone());
         } else {

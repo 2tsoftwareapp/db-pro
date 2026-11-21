@@ -23,7 +23,7 @@ pub(super) const AI_PREDICTION_EGRESS_NOTE: &str =
 mod query_helpers;
 pub(crate) use query_helpers::{
     database_error_diagnostic, deduplicate_diagnostics, deduplicate_messages, format_query_document,
-    prediction_replacement_range, toggle_query_comment, write_file_atomically,
+    friendly_connection_error, prediction_replacement_range, toggle_query_comment, write_file_atomically,
 };
 
 impl DbProApp {
@@ -382,7 +382,11 @@ impl DbProApp {
             QueryChromeAction::Explain => self.explain_query(),
             QueryChromeAction::Format => {
                 let capabilities = self.query_capabilities();
-                if let Some(request_id) = query_diagnostics_view::format_active_query(&mut self.query, capabilities) {
+                if let Some(request_id) = query_diagnostics_view::format_active_query(
+                    &mut self.query,
+                    capabilities,
+                    &mut self.feedback,
+                ) {
                     self.send_command_best_effort(UiCommand::CancelSqlPrediction { request_id });
                 }
             }

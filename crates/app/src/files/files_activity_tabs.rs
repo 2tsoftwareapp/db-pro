@@ -163,13 +163,14 @@ impl DbProApp {
 
     pub(super) fn draw_files_tasks_tab(&mut self, ui: &mut egui::Ui) {
         let actions = {
+            let task_running = self.workspace.files.task_in_flight();
             let mut context = FilesTasksContext {
                 theme: self.theme,
                 command: &mut self.workspace.files.workspace_task_command,
                 last_task: self.workspace.files.ide_workspace.last_task.as_ref(),
                 pending_shell: self.workspace.files.pending_shell,
                 task_output: &self.workspace.files.task_output,
-                task_running: self.workspace.files.task_in_flight(),
+                task_running,
             };
             context.draw(ui)
         };

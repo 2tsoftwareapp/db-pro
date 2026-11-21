@@ -4,12 +4,38 @@ use super::workspace_shell::WorkspaceLocation;
 const NAV_HISTORY_LIMIT: usize = 64;
 use super::*;
 impl DbProApp {
+    /// Connection behind the focused tab (#603): the SQL editor targets the
+    /// document's bound connection; other surfaces use the globally active one.
+    pub(super) fn focused_connection(&self) -> Option<&UiConnectionSummary> {
+        if matches!(self.workspace.active_tab, WorkspaceTab::Query) {
+            self.query
+                .session
+                .active_connection_id()
+                .and_then(|id| self.connection.catalog.find(id))
+                .or_else(|| self.active_connection())
+        } else {
+            self.active_connection()
+        }
+    }
+
+    /// True while a runtime session for the connection is (believed) open —
+    /// including a session behind an inactive document (#603).
+    pub(super) fn connection_is_live(&self, connection: &UiConnectionSummary) -> bool {
+        self.connection.lifecycle.has_live_session(&connection.id)
+            || (self.connection.lifecycle.is_connected()
+                && self.connection.lifecycle.active_connection_id() == Some(connection.id.as_str()))
+    }
+
     pub(super) fn draw_topbar(&mut self, ui: &mut egui::Ui) {
-        let connection_name = self.active_connection_name().to_owned();
-        let driver = self.active_driver().to_owned();
-        let has_connection = self.connection.lifecycle.active_connection_id().is_some();
-        let (connection_icon, connection_color) = self
-            .active_connection()
+        let focused = self.focused_connection();
+        let connection_name = focused
+            .map(|connection| connection.name.clone())
+            .unwrap_or_else(|| self.connection.lifecycle.fallback_name().to_owned());
+        let driver = focused
+            .map(|connection| connection.driver.clone())
+            .unwrap_or_else(|| self.active_driver().to_owned());
+        let has_connection = focused.is_some();
+        let (connection_icon, connection_color) = focused
             .map(|connection| self.connection_indicator(connection))
             .unwrap_or((Icon::Circle, self.theme.warning));
         self.record_workspace_navigation();
@@ -118,28 +144,26 @@ impl DbProApp {
     }
 
     pub(super) fn draw_statusbar(&mut self, ui: &mut egui::Ui) {
-        let (icon, color, label) = self.statusbar_state();
+        // UAT-6/#603: the status bar describes the connection backing what the user
+        // is looking at — the query document's binding for the SQL editor, the
+        // globally active connection elsewhere — never an unrelated connection.
+        let shown_connection = self.focused_connection();
+        let shown_live = shown_connection.is_some_and(|connection| self.connection_is_live(connection));
+        let (icon, color, label) = self.statusbar_state(shown_live);
         let runtime_status = self.runtime_status();
-        // UAT-6: a query document binds its own connection/schema — show that
-        // binding when it exists so the status bar describes what Run would hit,
-        // not whichever connection happens to be globally active.
-        let doc_connection = self
-            .query
-            .session
-            .active_connection_id()
-            .and_then(|id| self.connection.catalog.find(id));
-        let shown_connection = doc_connection.or_else(|| self.active_connection());
+        let doc_bound = matches!(self.workspace.active_tab, WorkspaceTab::Query)
+            && self.query.session.active_connection_id().is_some();
         let database = shown_connection.map(|connection| connection.database.clone());
-        let schema = if doc_connection.is_some() {
+        let schema = if doc_bound {
             self.query.session.active_schema().map(|s| s.to_owned())
         } else {
             self.active_connection()
                 .map(|_| self.active_schema().to_owned())
         };
-        let shown_name: &str = doc_connection
+        let shown_name: &str = shown_connection
             .map(|c| c.name.as_str())
             .unwrap_or_else(|| self.active_connection_name());
-        let shown_driver: &str = doc_connection
+        let shown_driver: &str = shown_connection
             .map(|c| c.driver.as_str())
             .unwrap_or_else(|| self.active_driver());
         let duration_ms = self
@@ -154,7 +178,7 @@ impl DbProApp {
             icon_color: color,
             label,
             runtime_status,
-            connected: self.connection.lifecycle.is_connected(),
+            connected: shown_live,
             connection_name: shown_name,
             driver: shown_driver,
             database: database.as_deref(),

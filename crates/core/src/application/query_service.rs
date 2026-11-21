@@ -180,14 +180,14 @@ impl QueryService {
             Ok(result) => {
                 if let Err(error) = result.validate() {
                     // #600: an invalid result set is still a failed run worth keeping.
-                    self.record_failed_statement(connection_id, sql, started, database, schema, &error.to_string())
+                    self.record_failed_statement(connection_id, sql, started.elapsed(), database, schema, &error.to_string())
                         .await;
                     return Err(DbError::QueryFailed(error));
                 }
                 result
             }
             Err(error) => {
-                self.record_failed_statement(connection_id, sql, started, database, schema, &error.to_string())
+                self.record_failed_statement(connection_id, sql, started.elapsed(), database, schema, &error.to_string())
                     .await;
                 return Err(error);
             }
@@ -252,6 +252,19 @@ impl QueryService {
             has_schema_change,
             started_at: std::time::Instant::now(),
         };
+
+        // A batch refused before it runs must not reach the database and must not
+        // leave a history row: nothing happened, so there is nothing to remember.
+        if statements.len() > 1 && has_mutation {
+            if let Some(error) = execution.validate_transactional_batch() {
+                return Ok(MultiQueryResult {
+                    results: Vec::new(),
+                    result_kinds: Vec::new(),
+                    total_duration_ms: execution.elapsed_ms(),
+                    error: Some(error),
+                });
+            }
+        }
 
         let mut result = super::query_schema::with_query_schema(schema, async {
             if statements.len() > 1 && has_mutation {
@@ -474,6 +487,7 @@ fn transaction_result_to_query_result(
     Ok((kind, query_result))
 }
 
+impl QueryService {
 /// Persist one history entry, masking credentials (#599) and never failing the query.
 async fn record_history(
     &self,
@@ -527,6 +541,7 @@ async fn record_failed_statement(
     {
         tracing::warn!("failed to save failed query to history: {save_error}");
     }
+}
 }
 
 /// Synthetic result describing a failed statement: zero rows, real elapsed time (#600).

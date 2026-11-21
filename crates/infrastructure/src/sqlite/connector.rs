@@ -86,8 +86,14 @@ impl DbConnector for SQLiteConnector {
     async fn test_connection(&self, config: &ConnectionConfig, _password: &str) -> Result<(), DbError> {
         // Testing must never create the file it is testing (#597): a typo would
         // otherwise "succeed" against a brand-new empty database.
-        let (db_path, _) = sqlite_target(config)?;
-        let actor = super::actor::SqliteActor::spawn_with_mode(db_path, super::actor::SqliteOpenMode::Existing)?;
+        let (db_path, mode) = sqlite_target(config)?;
+        // Never create the file being tested (#597), but `:memory:` has no file
+        // to create, so its mode must survive instead of becoming `Existing`.
+        let mode = match mode {
+            super::actor::SqliteOpenMode::Memory => super::actor::SqliteOpenMode::Memory,
+            _ => super::actor::SqliteOpenMode::Existing,
+        };
+        let actor = super::actor::SqliteActor::spawn_with_mode(db_path, mode)?;
         actor
             .execute("SELECT 1".into(), vec![], config.max_rows, config.query_timeout_ms)
             .await

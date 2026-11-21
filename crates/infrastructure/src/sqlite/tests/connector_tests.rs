@@ -41,15 +41,15 @@ fn empty_database_path_is_an_error_not_a_memory_database() {
     // #597: an empty path used to open `:memory:`, so a blank form silently
     // produced a database that vanished on disconnect.
     let error = sqlite_target(&config("   ", false, false))
-        .err()
-        .expect("an empty path must be rejected");
+        .expect_err("an empty path must be rejected");
     assert!(error.to_string().contains("empty"), "{error}");
 }
 
 #[test]
 fn in_memory_must_be_requested_explicitly() {
     for explicit in [":memory:", "MEMORY:"] {
-        let (target, mode) = sqlite_target(&config(explicit, false, false)).expect("explicit memory");
+        let cfg = config(explicit, false, false);
+        let (target, mode) = sqlite_target(&cfg).expect("explicit memory");
         assert_eq!(target, ":memory:");
         assert_eq!(mode, SqliteOpenMode::Memory);
     }
@@ -57,11 +57,13 @@ fn in_memory_must_be_requested_explicitly() {
 
 #[test]
 fn file_target_defaults_to_existing_only() {
-    let (target, mode) = sqlite_target(&config("/tmp/dbpro.db", false, false)).expect("target");
+    let cfg = config("/tmp/dbpro.db", false, false);
+    let (target, mode) = sqlite_target(&cfg).expect("target");
     assert_eq!(target, "/tmp/dbpro.db");
     assert_eq!(mode, SqliteOpenMode::Existing, "a missing file is not created implicitly");
 
-    let (_, mode) = sqlite_target(&config("/tmp/dbpro.db", false, true)).expect("target");
+    let opt_in = config("/tmp/dbpro.db", false, true);
+    let (_, mode) = sqlite_target(&opt_in).expect("target");
     assert_eq!(mode, SqliteOpenMode::CreateIfMissing, "the opt-in is honoured");
 }
 

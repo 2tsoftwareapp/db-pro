@@ -79,6 +79,7 @@ connection:
   browse_file: "파일 찾기…"
   sqlite_info_hint: "SQLite는 프로세스 내에서 직접 실행됩니다. 테이블, 인덱스, 트리거 및 외래 키가 자동으로 분석됩니다."
   test_connection: "연결 테스트"
+  diagnostics_hint: "이 연결을 확인하려면 연결 테스트를 실행하세요."
   save_connection: "연결 저장"
   update_connection: "연결 업데이트"
   cancel: "취소"

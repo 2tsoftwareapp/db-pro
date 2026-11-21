@@ -213,6 +213,8 @@ impl<'a> QueryExecutionContext<'a> {
             return;
         };
         document.execution_state = QueryExecutionState::Running(request_id);
+        // Whatever the grid is showing now is output of an earlier run (#607).
+        document.results_stale = true;
         document.execution_started_at = Some(Instant::now());
         document.execution_started_wall_time = Some(chrono::Utc::now().to_rfc3339());
         document.executing_range = Some(execution_range);

@@ -98,6 +98,13 @@ impl SchemaCompletionProvider {
         let replacement_start = ctx.cursor_offset.saturating_sub(prefix.len());
         let replacement_range = (replacement_start, ctx.cursor_offset);
 
+        // No completion directly after `AS` — the cursor is in alias position
+        // (`SELECT x AS |`) and columns/keywords are noise there (#607). A manual
+        // Ctrl+Space still works for users who really want it.
+        if !ctx.is_manual_trigger && ends_with_as_keyword(text_before) {
+            return (String::new(), Vec::new());
+        }
+
         // Check for dot qualifier right before the prefix
         let before_prefix = &text_before[..text_before.len() - prefix.len()];
         let qualifier = extract_qualifier(before_prefix);
@@ -1151,6 +1158,23 @@ fn subsequence_score(query: &str, label: &str) -> i32 {
         0
     } else {
         score
+    }
+}
+
+/// True when `text` ends with the SQL keyword AS (case-insensitive, word
+/// boundary, whitespace between the keyword and the cursor allowed).
+fn ends_with_as_keyword(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    if trimmed.len() < 2 {
+        return false;
+    }
+    let (head, tail) = trimmed.split_at(trimmed.len() - 2);
+    if !tail.eq_ignore_ascii_case("as") {
+        return false;
+    }
+    match head.chars().next_back() {
+        None => true,
+        Some(ch) => !(ch.is_alphanumeric() || ch == '_'),
     }
 }
 

@@ -173,7 +173,9 @@ pub fn draft_to_domain_config(draft: &UiConnectionDraft) -> ConnectionConfig {
             }
         },
         query_timeout_ms: 30_000,
-        max_rows: 500,
+        // Product ceiling, not a per-tab cap — the UI row-limit selector's
+        // injected LIMIT decides how many rows a read actually returns (#604).
+        max_rows: db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
         color: None,
         tags: draft
             .tags

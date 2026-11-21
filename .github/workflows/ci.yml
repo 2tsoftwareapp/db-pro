@@ -1,9 +1,8 @@
 name: CI
 
-# Main-branch pushes are verified locally (fmt/clippy/test). CI runs on PRs and manual dispatch only.
+# Automatic PR-triggered runs are disabled — quality gates are verified locally
+# before push (see AGENTS.md). The job remains available for manual dispatch.
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:

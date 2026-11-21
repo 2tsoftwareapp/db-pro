@@ -143,6 +143,10 @@ pub struct QueryDocument {
     /// `Rc::make_mut` if an in-place grid edit is ever needed.
     pub query_result: Option<Rc<UiQueryResult>>,
     pub query_results: Vec<Rc<UiQueryResult>>,
+    /// True once a newer run has been dispatched (or the last one was cancelled
+    /// or failed) while `query_results` still holds the previous output. Cleared
+    /// when fresh results land. Drives the "stale results" banner (#607).
+    pub results_stale: bool,
     /// Row cap the toolbar injected into the run that produced `query_results`
     /// (UAT-4). `Some(n)` lets the results header flag "limit n reached" when
     /// a result comes back exactly at the cap. `None` for uncapped runs.
@@ -227,6 +231,7 @@ impl QueryDocument {
             search: EditorSearchState::default(),
             query_result: None,
             query_results: Vec::new(),
+            results_stale: false,
             query_result_row_limit: None,
             query_result_names: HashMap::new(),
             pinned_results: std::collections::BTreeSet::new(),

@@ -3,6 +3,7 @@ use super::super::ide_workspace::{DependencyEdge, MigrationEntry};
 use super::super::*;
 use egui::RichText;
 use lucide_icons::Icon;
+use db_pro_ui::components::common::{format_shown_total};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum FilesSecondaryTabAction {

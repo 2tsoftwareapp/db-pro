@@ -59,8 +59,11 @@ impl DbProApp {
                 }
                 Action::Format => {
                     let capabilities = self.query_capabilities();
-                    if let Some(request_id) = query_diagnostics_view::format_active_query(&mut self.query, capabilities)
-                    {
+                    if let Some(request_id) = query_diagnostics_view::format_active_query(
+                        &mut self.query,
+                        capabilities,
+                        &mut self.feedback,
+                    ) {
                         self.send_command_best_effort(UiCommand::CancelSqlPrediction { request_id });
                     }
                 }

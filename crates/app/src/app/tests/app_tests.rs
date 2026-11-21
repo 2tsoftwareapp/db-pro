@@ -1358,6 +1358,37 @@ fn internal_error_code_is_normalized_for_mutation_state() {
 }
 
 #[test]
+fn sql_originated_failure_code_passes_through_for_mutation_state() {
+    // #610: a SQL-originated failure keeps the runtime's code and real
+    // message instead of being flattened into INTERNAL.
+    let mut app = DbProApp {
+        table: TableEditorState {
+            mutation: TableMutationState {
+                staged_apply_request: Some(crate::RequestId(9)),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    app.staged_apply_failed(StagedApplyFailure {
+        statement_index: usize::MAX,
+        code: "QUERY_FAILED",
+        message: "operator does not exist: text = uuid",
+        rolled_back: true,
+    });
+
+    let failure = app
+        .table
+        .mutation
+        .table_mutation_error
+        .expect("error should be visible");
+    assert_eq!(failure.code, "QUERY_FAILED");
+    assert_eq!(failure.message, "operator does not exist: text = uuid");
+}
+
+#[test]
 fn explain_query_uses_selected_connection_and_switches_output() {
     let (bridge, command_rx, _event_tx) = TaskBridge::with_channels();
     let mut app = DbProApp::with_task_bridge(bridge);
@@ -1555,7 +1586,7 @@ fn selected_connection_is_not_shown_as_connected() {
             .1,
         app.theme.accent
     );
-    assert_eq!(app.statusbar_state().2, "Not connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Not connected");
     assert!(!app.can_mutate_active_connection());
     app.connection.lifecycle.set_connected(true);
     assert_eq!(
@@ -1563,15 +1594,15 @@ fn selected_connection_is_not_shown_as_connected() {
             .1,
         app.theme.success
     );
-    assert_eq!(app.statusbar_state().2, "Connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Connected");
     assert!(app.can_mutate_active_connection());
     app.connection.catalog.connections_mut()[0].readonly = true;
     assert!(!app.can_mutate_active_connection());
     app.feedback.runtime_message = "Table data failed · timeout".to_owned();
     assert!(app.has_runtime_error());
-    assert_eq!(app.statusbar_state().2, "Connected");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Connected");
     app.connection.lifecycle.set_connected(false);
-    assert_eq!(app.statusbar_state().2, "Runtime error");
+    assert_eq!(app.statusbar_state(app.connection.lifecycle.is_connected()).2, "Runtime error");
 }
 
 #[test]
@@ -4003,10 +4034,7 @@ fn problems_panel_aggregates_open_document_diagnostics_and_navigates() {
 #[test]
 fn diagnostics_summary_redacts_runtime_errors_and_lists_mysql() {
     let mut app = DbProApp {
-        feedback: FeedbackState {
-            runtime_message: "connection failed password=hunter2".to_owned(),
-            ..Default::default()
-        },
+        feedback: FeedbackState::with_message("connection failed password=hunter2"),
         ..DbProApp::default()
     };
     app.connection
@@ -4368,7 +4396,7 @@ fn closing_workspace_tab_clears_its_resource_and_requests() {
             },
             data_query: TableDataQueryState {
                 request: Some(crate::RequestId(3)),
-                result: Some(result()),
+                result: Some(std::rc::Rc::new(result())),
                 filters: vec![UiTableDataFilter {
                     column: "id".to_owned(),
                     data_type: "integer".to_owned(),
@@ -4592,9 +4620,11 @@ fn test_format_cell_csv_and_cell_to_json() {
         result_grid_export::format_cell_csv(&UiCell::Number("42.50".to_owned())),
         "42.50"
     );
+    // #593: the clipboard path is raw — no RFC-4180 quoting, so a paste into an
+    // editor or `psql` reproduces the cell exactly.
     assert_eq!(
         result_grid_export::format_cell_csv(&UiCell::Text("Hello, \"World\"".to_owned())),
-        "\"Hello, \"\"World\"\"\""
+        "Hello, \"World\""
     );
 
     assert_eq!(
@@ -6520,7 +6550,7 @@ fn test_apply_mutation_failure_preserves_changeset_and_focuses_failed_cell() {
             },
             state: TableState { ..Default::default() },
             data_query: TableDataQueryState {
-                result: Some(UiQueryResult {
+                result: Some(std::rc::Rc::new(UiQueryResult {
                     columns: vec![
                         crate::UiColumn {
                             name: "id".to_owned(),
@@ -6540,7 +6570,7 @@ fn test_apply_mutation_failure_preserves_changeset_and_focuses_failed_cell() {
                     ],
                     row_count: 3,
                     duration_ms: 0,
-                }),
+                })),
                 ..Default::default()
             },
             ..Default::default()

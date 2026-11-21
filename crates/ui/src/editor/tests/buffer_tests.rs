@@ -147,6 +147,9 @@ fn incremental_line_index_matches_full_rebuild_580() {
         anchor_offset: offset,
     };
 
+    // A table of one-line buffer mutations; naming the closure box buys nothing
+    // and changing the element type would change the capture lifetimes.
+    #[allow(clippy::type_complexity)]
     let cases: Vec<Box<dyn Fn(&mut TextBuffer)>> = vec![
         Box::new(|buf: &mut TextBuffer| buf.insert_with_snapshot(8, "x", snap(8), snap(9))),
         Box::new(|buf: &mut TextBuffer| buf.type_text(9, "\n", snap(9), snap(10))),
@@ -187,6 +190,8 @@ fn typing_in_a_long_line_updates_max_line_chars_580() {
     assert_eq!(buf.max_line_len_chars(), 45);
     assert_eq!(buf.line_count(), 2);
     buf.delete_with_snapshot(5, 45, snap(45), snap(5));
-    assert_eq!(buf.max_line_len_chars(), 7);
+    // Everything typed after "short" is gone, so the longest line is the five
+    // characters that were already there.
+    assert_eq!(buf.max_line_len_chars(), 5);
     assert_eq!(buf.line_count(), 2);
 }

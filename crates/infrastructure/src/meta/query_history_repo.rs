@@ -9,11 +9,11 @@ use super::store::SQLiteMetaStore;
 
 #[async_trait]
 impl QueryHistoryRepository for SQLiteMetaStore {
-    async fn save(
+    async fn save<'a>(
         &self,
         connection_id: &ConnectionId,
         sql: &str,
-        result: Option<&QueryResult>,
+        result: Option<&'a QueryResult>,
         database: Option<String>,
         schema: Option<String>,
         error_message: Option<String>,
@@ -33,8 +33,9 @@ impl QueryHistoryRepository for SQLiteMetaStore {
                     result.map_or(0, |result| result.row_count).to_string(),
                     database.unwrap_or_default(),
                     schema.unwrap_or_default(),
-                    // #600: a missing result means the statement failed.
-                    i64::from(result.is_some()).to_string(),
+                    // #600: a failure is a row carrying an error message; a failed
+                    // statement still stores the synthetic zero-row result.
+                    i64::from(error_message.is_none()).to_string(),
                     // #600: prefer the redacted server error over a generic placeholder.
                     error_message.unwrap_or_default(),
                 ],

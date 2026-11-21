@@ -2,7 +2,8 @@ use super::mapper::draft_to_domain_config;
 use crate::{RequestId, UiCommand, UiConnectionDraft, UiDriver};
 use db_pro_core::domain::connection::SshProfile;
 use db_pro_core::domain::connection_diagnostics::{
-    probe_network_stages, with_auth_result, ConnectionDiagnosticsReport,
+    probe_network_stages, redact_diag_message, with_auth_result, ConnectionDiagnosticsReport, ConnectionStage,
+    StageResult,
 };
 
 /// Validate that the draft has all required fields and valid ports.
@@ -133,6 +134,36 @@ pub fn probe_draft_diagnostics(
     let config = draft_to_domain_config(draft);
     let report = probe_network_stages(&config);
     with_auth_result(report, auth_ok, auth_message)
+}
+
+/// Mark the auth stage of a diagnostics report with the real failure reason.
+///
+/// The report is captured when the test is dispatched with a placeholder
+/// ("Authentication pending…"); when the runtime reports the real failure we
+/// rewrite that stage instead of leaving the placeholder on screen forever.
+/// Network stages probed at dispatch time are preserved (#609).
+pub(crate) fn mark_diagnostics_auth_failed(report: &mut ConnectionDiagnosticsReport, message: &str) {
+    let message = redact_diag_message(message);
+    // A probe-time transport failure (DNS/TCP) is the stage that explains the
+    // failure — keep it as the headline. Otherwise the auth stage owns the
+    // verdict, with the runtime's real reason.
+    let transport_failed = report
+        .failed_stage
+        .is_some_and(|stage| stage != ConnectionStage::Auth);
+    match report.stages.iter_mut().find(|stage| stage.stage == ConnectionStage::Auth) {
+        Some(stage) => {
+            stage.ok = false;
+            stage.message = message;
+        }
+        None => report.stages.push(StageResult {
+            stage: ConnectionStage::Auth,
+            ok: false,
+            message,
+        }),
+    }
+    if !transport_failed {
+        report.failed_stage = Some(ConnectionStage::Auth);
+    }
 }
 
 #[cfg(test)]

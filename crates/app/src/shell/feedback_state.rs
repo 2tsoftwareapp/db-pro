@@ -31,6 +31,14 @@ pub(crate) struct FeedbackState {
 }
 
 impl FeedbackState {
+    /// Build the initial state with its first status message already recorded in
+    /// the log (#571) — `..Default::default()` cannot reach the private log.
+    pub(crate) fn with_message(message: impl Into<String>) -> Self {
+        let mut state = Self::default();
+        state.set_runtime_message(message);
+        state
+    }
+
     pub(crate) fn set_runtime_message(&mut self, message: impl Into<String>) {
         self.runtime_message_activity = None;
         let message = message.into();
@@ -45,7 +53,9 @@ impl FeedbackState {
         self.runtime_message = message;
     }
 
-    /// Recent messages, newest last.
+    /// Recent messages, newest last. Test-only accessor: production code reads
+    /// [`Self::last_error`] so a retained failure still reaches the status bar.
+    #[cfg(test)]
     pub(crate) fn log(&self) -> &[FeedbackEntry] {
         &self.log
     }
@@ -85,11 +95,17 @@ impl FeedbackState {
     }
 
     pub(crate) fn show_error_toast(&mut self, message: impl Into<String>) {
+        self.show_error_toast_at(message, ToastPosition::BottomRight);
+    }
+
+    /// Toast anchored to a caller-chosen corner — modal dialogs use this so
+    /// the toast never covers the dialog's footer actions (#609).
+    pub(crate) fn show_error_toast_at(&mut self, message: impl Into<String>, position: ToastPosition) {
         // Keep the error in the log too: the toast is persistent now, but the
         // log survives dismissing it (#571).
         let message = message.into();
         self.remember(message.clone(), None, true);
-        self.toasts.error(message, ToastPosition::BottomRight);
+        self.toasts.error(message, position);
     }
 
     pub(crate) fn show_success_toast(&mut self, message: impl Into<String>) {

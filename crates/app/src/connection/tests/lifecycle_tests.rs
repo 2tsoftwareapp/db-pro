@@ -25,3 +25,16 @@
         assert!(!state.connected);
         assert_eq!(state.fallback_name, "Local PostgreSQL");
     }
+
+    #[test]
+    fn live_sessions_track_open_and_close() {
+        let mut state = ConnectionLifecycleState::default();
+        assert!(!state.has_live_session("pg-1"));
+        state.note_session_opened("pg-1");
+        state.note_session_opened("sqlite-1");
+        assert!(state.has_live_session("pg-1"));
+        assert!(state.has_live_session("sqlite-1"));
+        state.note_session_closed("pg-1");
+        assert!(!state.has_live_session("pg-1"));
+        assert!(state.has_live_session("sqlite-1"));
+    }

@@ -401,7 +401,7 @@ fn draw_schema_compare_body(
                             ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(sql)));
                             context
                                 .feedback
-                                .set_runtime_message(&t!("compare.copy_migration_sql"));
+                                .set_runtime_message(t!("compare.copy_migration_sql").as_ref());
                         }
                     });
                 });

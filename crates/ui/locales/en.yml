@@ -79,6 +79,7 @@ connection:
   browse_file: "Browse File…"
   sqlite_info_hint: "SQLite is embedded in-process. Tables, indexes, triggers, and foreign keys are introspected automatically."
   test_connection: "Test Connection"
+  diagnostics_hint: "Run Test to verify this connection."
   save_connection: "Save Connection"
   update_connection: "Update Connection"
   cancel: "Cancel"

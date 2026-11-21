@@ -24,21 +24,31 @@ impl DbProApp {
 
     /// Results grid plus its row-count / export header.
     pub(super) fn draw_results_pane(&mut self, ui: &mut egui::Ui, result: Option<&UiQueryResult>) {
-        let (active_result_index, result_names, pinned_results, row_limit) = if let Some(active_doc) = self
-            .query
-            .session
-            .documents
-            .get(self.query.session.active_document_index)
-        {
-            (
-                active_doc.active_result_index,
-                active_doc.query_result_names.clone(),
-                active_doc.pinned_results.clone(),
-                active_doc.query_result_row_limit,
-            )
-        } else {
-            (0, std::collections::HashMap::new(), std::collections::BTreeSet::new(), None)
-        };
+        let (active_result_index, result_names, pinned_results, row_limit, results_stale, results_running) =
+            if let Some(active_doc) = self
+                .query
+                .session
+                .documents
+                .get(self.query.session.active_document_index)
+            {
+                (
+                    active_doc.active_result_index,
+                    active_doc.query_result_names.clone(),
+                    active_doc.pinned_results.clone(),
+                    active_doc.query_result_row_limit,
+                    active_doc.results_stale,
+                    matches!(active_doc.execution_state, QueryExecutionState::Running(_)),
+                )
+            } else {
+                (
+                    0,
+                    std::collections::HashMap::new(),
+                    std::collections::BTreeSet::new(),
+                    None,
+                    false,
+                    false,
+                )
+            };
         let context = query_results_surface_view::QueryResultsSurfaceContext {
             theme: self.theme,
             result_count: self.query.session.active_result_count(),
@@ -47,6 +57,8 @@ impl DbProApp {
             pinned_results: &pinned_results,
             result,
             row_limit,
+            results_stale,
+            results_running,
         };
 
         if let Some(action) = query_results_surface_view::draw_results(&context, ui, |ui, result| {

@@ -349,7 +349,11 @@ pub(crate) fn output_dock_max_height(available_height: f32) -> f32 {
 /// On a very short pane the dock shrinks below [`OUTPUT_MIN_HEIGHT`] rather than
 /// pushing the editor past the bottom edge.
 pub(crate) fn output_dock_min_height(available_height: f32) -> f32 {
-    (available_height - EDITOR_MIN_HEIGHT).clamp(OUTPUT_ABSOLUTE_MIN_HEIGHT, OUTPUT_MIN_HEIGHT)
+    // The editor keeps roughly two thirds of a short pane, so a 240 px window
+    // gives the dock ~84 px instead of a 120 px floor that pushes the editor
+    // past the bottom edge (#576).
+    let editor_reserve = (available_height * 0.65).max(EDITOR_MIN_HEIGHT);
+    (available_height - editor_reserve).clamp(OUTPUT_ABSOLUTE_MIN_HEIGHT, OUTPUT_MIN_HEIGHT)
 }
 pub(crate) const TABLE_PAGE_SIZE: u64 = 100;
 pub(crate) const GRID_ROW_NUMBER_WIDTH: f32 = 48.0;

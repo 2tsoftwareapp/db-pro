@@ -543,3 +543,84 @@ fn standard_field_geometry_is_independent_of_parent_spacing_and_accessories() {
         }
     }
 }
+
+#[test]
+fn click_then_type_in_the_same_frame_goes_to_the_clicked_field() {
+    // Regression guard (#609): egui applies `request_focus` immediately, but the
+    // field that had focus when the frame started is drawn first and consumes
+    // this frame's text events. The pre-pass runs before any widget draws and
+    // hands focus to the pressed field, so characters typed alongside a click
+    // land in the clicked field — not the previously focused one.
+    use egui::{CentralPanel, Context, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+
+    use crate::{components::input::focus_text_field_under_pointer, components::Input, DbProTheme};
+
+    let ctx = Context::default();
+    DbProTheme::install_fonts(&ctx);
+    let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(420.0, 300.0));
+    let mut first = String::from("name");
+    let mut second = String::new();
+    let mut first_id = None;
+    let mut second_rect = None;
+
+    let _ = crate::test_frame::frame(
+        &ctx,
+        RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        },
+        |ctx| {
+            CentralPanel::default().show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    let first_response =
+                        Input::new(&mut first, "Name", DbProTheme::dark()).id_salt("test.first").show(ui);
+                    first_id = Some(first_response.id);
+                    let second_response =
+                        Input::new(&mut second, "Port", DbProTheme::dark()).id_salt("test.second").show(ui);
+                    second_rect = Some(second_response.rect);
+                });
+            });
+        },
+    );
+    let first_id = first_id.expect("first field drawn");
+    let second_rect = second_rect.expect("second field drawn");
+    // The user had been editing the first field.
+    ctx.memory_mut(|memory| memory.request_focus(first_id));
+
+    let pos = second_rect.center();
+    let _ = crate::test_frame::frame(
+        &ctx,
+        RawInput {
+            screen_rect: Some(screen),
+            events: vec![
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::default(),
+                },
+                Event::Text("2".to_owned()),
+                Event::PointerButton {
+                    pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::default(),
+                },
+            ],
+            ..Default::default()
+        },
+        |ctx| {
+            // Same pre-pass the app runs before drawing the shell.
+            focus_text_field_under_pointer(ctx);
+            CentralPanel::default().show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    Input::new(&mut first, "Name", DbProTheme::dark()).id_salt("test.first").show(ui);
+                    Input::new(&mut second, "Port", DbProTheme::dark()).id_salt("test.second").show(ui);
+                });
+            });
+        },
+    );
+
+    assert_eq!(second, "2", "the typed character must land in the clicked field");
+    assert_eq!(first, "name", "the previously focused field must not receive the character");
+}

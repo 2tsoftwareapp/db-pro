@@ -269,14 +269,15 @@ fn numeric_specials_decode_to_their_literals_590() {
         decode_binary_numeric(&numeric_payload(0xF000, &[])).as_deref(),
         Some("-Infinity")
     );
-    // Ordinary values keep their previous behaviour.
+    // Ordinary values keep every base-10000 digit: weight 0 puts the first group
+    // at the units position, so `[12, 3400]` is 12.3400 and `[1]` is -1.
     assert_eq!(
         decode_binary_numeric(&numeric_payload(0x0000, &[12, 3400])).as_deref(),
-        Some("123400")
+        Some("12.3400")
     );
     assert_eq!(
         decode_binary_numeric(&numeric_payload(0x4000, &[1])).as_deref(),
-        Some("-0001")
+        Some("-1")
     );
     // A special sign with digits is malformed, not silently accepted.
     assert!(decode_binary_numeric(&numeric_payload(0xD000, &[1])).is_none());

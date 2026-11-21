@@ -583,6 +583,9 @@ mod shortcut_catalog_tests;
 #[cfg(test)]
 #[path = "../table/tests/table_data_export_tests.rs"]
 mod table_data_export_tests;
+#[cfg(test)]
+#[path = "../table/tests/table_layout_tests.rs"]
+mod table_layout_tests;
 #[path = "../table/table_ddl_surface_view.rs"]
 mod table_ddl_surface_view;
 #[path = "../table/table_ddl_view.rs"]

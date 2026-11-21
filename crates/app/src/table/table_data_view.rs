@@ -116,7 +116,7 @@ impl DbProApp {
         self.draw_conflict_dialog(ui, &result);
         self.draw_export_dialog(ui, Some(&result));
         if self.table.data_query.result.is_none() {
-            self.table.data_query.set_result(result);
+            self.table.data_query.set_result_handle(result);
         }
     }
 

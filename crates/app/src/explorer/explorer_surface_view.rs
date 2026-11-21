@@ -202,14 +202,16 @@ impl ExplorerSurfaceContext<'_> {
         let mut actions = Vec::new();
         for connection in self.catalog.iter().cloned() {
             let is_active = self.lifecycle.active_connection_id() == Some(connection.id.as_str());
-            let is_connected = self.lifecycle.is_connected() && is_active;
+            let is_connected = (self.lifecycle.is_connected() && is_active)
+                || self.lifecycle.has_live_session(&connection.id);
+            let schema_model = (is_connected && is_active).then(|| self.schema_tree_model(&connection));
             let model = ExplorerConnectionNodeModel {
                 is_connected,
+                is_active,
                 is_connecting: self.is_connection_connecting(&connection, is_active),
                 is_failed: self.lifecycle.has_failed_connection(&connection.id),
                 error: self.lifecycle.connection_error(&connection.id).map(str::to_owned),
             };
-            let schema_model = is_connected.then(|| self.schema_tree_model(&connection));
             let node_actions = ExplorerConnectionNodeView::new(self.theme, &connection, model, self.modifier)
                 .draw(ui, schema_model.map(|model| (&mut *self.explorer, model)));
             for action in node_actions {

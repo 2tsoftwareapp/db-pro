@@ -3,7 +3,7 @@ use safety_cte::classify_cte_safety;
 use safety_lexer::{
     is_escape_string_start, is_identifier_continue, is_identifier_start, matching_parenthesis_end, scan_identifier,
     skip_block_comment, skip_dollar_quote, skip_line_comment, skip_quoted, special_token_end, token_is_word,
-    tokenize_sql, SqlTokenKind,
+    tokenize_sql, SqlToken, SqlTokenKind,
 };
 use safety_split::{BlockSplitter, StatementBodyTerminator};
 pub use safety_policy::{validate_against_policy, ConnectionSafetyPolicy};
@@ -100,20 +100,60 @@ fn scan_with_statement(sql: &str, backslash_escapes: bool) -> Option<String> {
         index += 1;
     }
 
-    let mut depth = 0usize;
-    for token in tokens.iter().skip(index) {
-        if depth == 0 && token.kind == SqlTokenKind::Word {
-            let word = &sql[token.start..token.end];
-            if !word.eq_ignore_ascii_case("AS")
-                && !word.eq_ignore_ascii_case("NOT")
-                && !word.eq_ignore_ascii_case("MATERIALIZED")
-            {
-                return Some(word.to_owned());
+    loop {
+        // Walk to the CTE's `AS`, stepping over the optional column list. The
+        // name itself may be a quoted identifier, which the lexer skips, so the
+        // `AS` keyword — not the name — anchors the CTE.
+        loop {
+            let token = *tokens.get(index)?;
+            if token.kind == SqlTokenKind::OpenParen {
+                index = skip_balanced_parens(&tokens, index)?;
+                continue;
             }
+            if token_is_word(sql, token, "AS") {
+                index += 1;
+                break;
+            }
+            if token.kind == SqlTokenKind::Comma {
+                // A stray comma before `AS` means this is not a CTE list.
+                return None;
+            }
+            index += 1;
         }
+        while tokens
+            .get(index)
+            .is_some_and(|token| token_is_word(sql, *token, "NOT") || token_is_word(sql, *token, "MATERIALIZED"))
+        {
+            index += 1;
+        }
+        let body = *tokens.get(index)?;
+        if body.kind != SqlTokenKind::OpenParen {
+            return None;
+        }
+        index = skip_balanced_parens(&tokens, index)?;
+        if tokens.get(index).is_some_and(|token| token.kind == SqlTokenKind::Comma) {
+            index += 1;
+            continue;
+        }
+        break;
+    }
+
+    let verb = *tokens.get(index)?;
+    (verb.kind == SqlTokenKind::Word).then(|| sql[verb.start..verb.end].to_owned())
+}
+
+/// Index just past the `)` matching the `(` at `open`.
+fn skip_balanced_parens(tokens: &[SqlToken], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, token) in tokens.iter().enumerate().skip(open) {
         match token.kind {
             SqlTokenKind::OpenParen => depth += 1,
-            SqlTokenKind::CloseParen => depth = depth.saturating_sub(1),
+            SqlTokenKind::CloseParen => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(offset + 1);
+                }
+            }
             _ => {}
         }
     }

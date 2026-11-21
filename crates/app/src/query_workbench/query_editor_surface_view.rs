@@ -1,7 +1,7 @@
 // cc-scan:allow-file HUGE_FUNCTION,LONG_FUNCTION,HARD_COMPLEXITY,COMPLEXITY,DEEP_NESTING
 // cc-scan:allow-file HARD_PARAMS,TOO_MANY_PARAMS,DUPLICATE_BLOCK
 // egui painter/view file: fns are linear layout code; branches are per-state paint variants.
-use super::query_editor_support::{draw_rich_hover_popup, draw_signature_help};
+use super::query_editor_support::{close_completion, draw_rich_hover_popup, draw_signature_help};
 use super::query_view::{format_query_document, prediction_replacement_range};
 use super::*;
 use crate::editor::{
@@ -141,7 +141,7 @@ impl<'view> QueryEditorSurfaceContext<'view> {
         let completion_intent =
             EditorInteractionPolicy::completion_intent(response, frame.is_completion_open, cursor_context_changed);
         if completion_intent == CompletionIntent::Close {
-            doc.completion.close();
+            close_completion(doc);
         }
         if cursor_context_changed {
             if let Some(request_id) = doc.pending_prediction_request {
@@ -373,7 +373,7 @@ impl<'view> QueryEditorSurfaceContext<'view> {
         };
         let (prefix, items) = SchemaCompletionProvider::provide(&context);
         if items.is_empty() {
-            doc.completion.close();
+            close_completion(doc);
         } else {
             doc.completion.open(
                 doc.cursor.offset,

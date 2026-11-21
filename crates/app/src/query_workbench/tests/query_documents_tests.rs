@@ -191,3 +191,67 @@
         assert_eq!(query_session.documents.len(), 1);
         assert_eq!(query_session.documents[0].id, "query-1");
     }
+    #[test]
+    fn open_text_document_preselects_the_template_so_typing_replaces_it() {
+        let mut query_session = QuerySessionState::default();
+        let mut query_editor = QueryEditorState::default();
+        let mut workspace = WorkspaceFeatureState::default();
+        let mut agent = AgentState::default();
+        let mut query_output = QueryOutputState::default();
+        let mut schema_explorer = SchemaExplorerState::default();
+        let mut task_bridge = TaskBridge::default();
+        let mut feedback = FeedbackState::default();
+        let mut execution = QueryExecutionPolicyState::default();
+        let template = "SELECT *\nFROM \"shop\".\"customers\"\nLIMIT 100;".to_owned();
+
+        QueryDocumentContext {
+            query_session: &mut query_session,
+            query_editor: &mut query_editor,
+            workspace: &mut workspace,
+            agent: &mut agent,
+            query_output: &mut query_output,
+            schema_explorer: &mut schema_explorer,
+            command_dispatcher: command_dispatch::RuntimeCommandDispatcher::new(&mut task_bridge),
+            feedback: &mut feedback,
+            execution: &mut execution,
+            active_connection_id: Some("connection-1".to_owned()),
+            active_schema: String::new(),
+        }
+        .open_text_document(template.clone(), None);
+
+        let document = query_session.active_document().expect("document opened");
+        assert_eq!(document.selection.normalized(), (0, template.len()));
+        assert_eq!(document.cursor.offset, template.len());
+    }
+
+    #[test]
+    fn open_text_document_with_empty_template_places_the_caret_at_the_end() {
+        let mut query_session = QuerySessionState::default();
+        let mut query_editor = QueryEditorState::default();
+        let mut workspace = WorkspaceFeatureState::default();
+        let mut agent = AgentState::default();
+        let mut query_output = QueryOutputState::default();
+        let mut schema_explorer = SchemaExplorerState::default();
+        let mut task_bridge = TaskBridge::default();
+        let mut feedback = FeedbackState::default();
+        let mut execution = QueryExecutionPolicyState::default();
+
+        QueryDocumentContext {
+            query_session: &mut query_session,
+            query_editor: &mut query_editor,
+            workspace: &mut workspace,
+            agent: &mut agent,
+            query_output: &mut query_output,
+            schema_explorer: &mut schema_explorer,
+            command_dispatcher: command_dispatch::RuntimeCommandDispatcher::new(&mut task_bridge),
+            feedback: &mut feedback,
+            execution: &mut execution,
+            active_connection_id: None,
+            active_schema: String::new(),
+        }
+        .open_text_document(String::new(), None);
+
+        let document = query_session.active_document().expect("document opened");
+        assert_eq!(document.selection.normalized(), (0, 0));
+        assert_eq!(document.cursor.offset, 0);
+    }

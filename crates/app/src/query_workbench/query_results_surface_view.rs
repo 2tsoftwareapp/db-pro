@@ -12,6 +12,10 @@ pub(super) struct QueryResultsSurfaceContext<'a> {
     pub(super) result: Option<&'a UiQueryResult>,
     /// Applied query cap, displayed as a limit indicator without asserting truncation.
     pub(super) row_limit: Option<u64>,
+    /// The grid still shows rows from an earlier run (#607).
+    pub(super) results_stale: bool,
+    /// The latest run is in flight while the previous results stay visible.
+    pub(super) results_running: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +41,9 @@ where
     grid_frame(context.theme).show(ui, |ui| {
         ui.set_min_width(results_width.max(0.0));
         draw_result_selector(context, ui, &mut action);
+        if context.results_stale && context.result.is_some() {
+            draw_stale_results_banner(context, ui);
+        }
         if let Some(result) = context.result {
             ui.horizontal(|ui| {
                 let is_pinned = context.pinned_results.contains(&context.active_result_index);
@@ -100,6 +107,35 @@ where
         }
     });
     action
+}
+
+/// Flag the grid while it shows output of an earlier run so the user cannot
+/// mistake it for the in-flight or just-cancelled query's result (#607).
+fn draw_stale_results_banner(context: &QueryResultsSurfaceContext<'_>, ui: &mut egui::Ui) {
+    let text = if context.results_running {
+        "Running — grid still shows output from the previous run"
+    } else {
+        "Showing output from the previous run — the last query did not complete"
+    };
+    egui::Frame::NONE
+        .fill(context.theme.warning_soft())
+        .stroke(egui::Stroke::new(1.0, context.theme.warning.linear_multiply(0.4)))
+        .corner_radius(egui::CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(char::from(Icon::TriangleAlert).to_string())
+                        .font(egui::FontId::new(
+                            12.0,
+                            egui::FontFamily::Name("lucide".into()),
+                        ))
+                        .color(context.theme.warning),
+                );
+                ui.label(RichText::new(text).small().color(context.theme.warning));
+            });
+        });
+    ui.add_space(2.0);
 }
 
 fn draw_result_selector(

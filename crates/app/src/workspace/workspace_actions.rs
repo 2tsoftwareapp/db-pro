@@ -176,19 +176,8 @@ impl DbProApp {
     fn poll_workspace_tasks(&mut self) {
         // #579: search / preview / replace-all / refactor results.
         self.workspace.files.poll_read_task(&mut self.feedback);
-        if self.workspace.files.poll_task().is_some() {
-            // #579: `last_task` is already published; surface the exit code.
-            // #569: `format!("{:?}")` printed `Some(0)`.
-            let result = self.workspace.files.ide_workspace.last_task.clone();
-            if let Some(result) = result {
-                self.feedback.runtime_message = t!(
-                    "workspace.task_exit",
-                    code = fmt_opt(result.exit_code).as_str(),
-                    ms = result.duration_ms
-                )
-                .into_owned();
-            }
-        }
+        // #579/#569: `poll_task` publishes `last_task` and the exit-code message.
+        self.workspace.files.poll_task(&mut self.feedback);
         if let Some((indexed, error, _roots)) = self.workspace.files.poll_scan_task() {
             self.feedback.runtime_message = match error {
                 Some(error) => format!("Workspace scan failed: {error}"),
@@ -788,6 +777,9 @@ impl DbProApp {
             }
             "empty" => {
                 if let Some(result) = &mut self.table.data_query.result {
+                    // The grid is shared behind an `Rc` (#581): copy-on-write
+                    // before clearing it so other holders keep their rows.
+                    let result = std::rc::Rc::make_mut(result);
                     result.rows.clear();
                     result.row_count = 0;
                 }

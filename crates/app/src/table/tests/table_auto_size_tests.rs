@@ -20,8 +20,9 @@ fn narrow_and_wide_ascii_differ() {
 #[test]
 fn cjk_glyphs_measure_at_two_cells() {
     // A Chinese column name used to be sized as if every glyph were Latin.
+    // Same character count, so the ratio is the cell width itself.
     let cjk = measured_text_width("数据库");
-    let latin = measured_text_width("abcd");
+    let latin = measured_text_width("abc");
     assert!(cjk > latin * 1.8, "CJK {cjk} should be ~2x Latin {latin}");
 }
 

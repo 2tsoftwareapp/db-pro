@@ -67,6 +67,9 @@ impl SqlServerIntrospect {
             views,
             triggers,
             functions,
+            // SQL Server keeps the definition in sys.sql_modules, not as a
+            // provider-stored CREATE TABLE text (#596 is SQLite-only).
+            table_definition_sql: Vec::new(),
         })
     }
 }

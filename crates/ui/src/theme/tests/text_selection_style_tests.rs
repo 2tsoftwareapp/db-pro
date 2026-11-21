@@ -142,7 +142,9 @@ fn caret_only_focus_does_not_count_as_a_selection() {
                 egui::TextEdit::singleline(&mut text) // ui-rules: #585 probe for the raw egui TextEdit state
                     .text_color(crate::DbProTheme::light().text_secondary),
             );
-            text_edit_id = Some(response.id.with("text"));
+            // `TextEdit` stores its state under the widget's own id, which is
+            // also the id the focus system uses.
+            text_edit_id = Some(response.id);
         });
     });
     let id = text_edit_id.expect("text edit id");

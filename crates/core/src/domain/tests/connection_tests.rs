@@ -23,6 +23,7 @@ fn valid_config() -> ConnectionConfig {
         favorite: false,
         environment: Default::default(),
         readonly: false,
+        create_if_missing: false,
     }
 }
 

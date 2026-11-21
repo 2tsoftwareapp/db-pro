@@ -1,6 +1,7 @@
 //! Read-only monitoring snapshot presentation.
 
 use super::*;
+use db_pro_ui::components::common::{fmt_opt};
 
 /// Row caps for the snapshot sections (#569).
 const HEALTH_FINDING_CAP: usize = 25;

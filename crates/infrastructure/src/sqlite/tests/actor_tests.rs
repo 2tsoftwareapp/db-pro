@@ -136,12 +136,14 @@ async fn actor_survives_panicking_command_and_keeps_serving() {
 
 #[test]
 fn trigger_body_is_one_unit_for_the_batch_splitter() {
-    // #586: `execute_batch` prepares one statement at a time, so the inner `;`
-    // of a trigger body used to be read as a statement boundary.
+    // #586: the body's inner `;` are not statement boundaries. Splitting them out
+    // used to hand a bare `END` to the engine, which the transaction-control
+    // guard then refused ("END cannot run inside an atomic batch").
     let trigger = "CREATE TRIGGER trg AFTER INSERT ON t BEGIN UPDATE t SET b = 'x'; INSERT INTO log VALUES (1); END";
     let units = expand_batch_units(trigger);
-    assert_eq!(units.len(), 3, "{units:?}");
-    assert_eq!(units[2], "END");
+    assert_eq!(units.len(), 1, "{units:?}");
+    assert!(units[0].starts_with("CREATE TRIGGER"), "{units:?}");
+    assert!(units[0].trim_end().ends_with("END"), "{units:?}");
 }
 
 #[test]
@@ -152,8 +154,7 @@ fn existing_mode_refuses_a_missing_file_without_creating_it() {
     let _ = std::fs::remove_file(&path);
 
     let error = open_connection(&path_str, SqliteOpenMode::Existing)
-        .err()
-        .expect("a missing file must not be created");
+        .expect_err("a missing file must not be created");
     assert!(error.to_string().contains("does not exist"), "{error}");
     assert!(!path.exists(), "no file may be created");
 }

@@ -1,5 +1,6 @@
 //! Feature-owned lifecycle state for query documents and their shell requests.
 
+use super::query_editor_support::close_completion;
 use super::{PendingBulkClose, QueryDocument, QueryExecutionState};
 use crate::runtime::UiQueryResult;
 use crate::RequestId;
@@ -150,7 +151,7 @@ impl QuerySessionState {
             return false;
         }
         document.connection_id = connection_id;
-        document.completion.clear();
+        close_completion(document);
         // UAT-8: a schema belongs to the connection it was picked from — keep a
         // stale "main" only until the driver's own default resolves it.
         document.schema = None;
@@ -162,7 +163,7 @@ impl QuerySessionState {
             return false;
         };
         document.schema = schema;
-        document.completion.clear();
+        close_completion(document);
         true
     }
 

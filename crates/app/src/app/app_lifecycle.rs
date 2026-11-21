@@ -21,6 +21,11 @@ impl eframe::App for DbProApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Hand keyboard focus to a text field the user pressed this frame
+        // *before* any widget reads this frame's text events — otherwise the
+        // characters typed alongside a click land in the previously focused
+        // field (#609).
+        db_pro_ui::components::input::focus_text_field_under_pointer(ui.ctx());
         clear_stale_cursor(ui.ctx());
         self.draw_shell(ui);
         self.draw_overlays(ui.ctx());
@@ -170,7 +175,7 @@ impl DbProApp {
         });
     }
 
-    fn prepare_frame(&mut self, ctx: &egui::Context) {
+    pub(super) fn prepare_frame(&mut self, ctx: &egui::Context) {
         // #573: the window is no longer re-maximized on the first frames. eframe
         // restores the persisted frame (size *and* position); a viewport command
         // issued here overrode it, so a resized window came back maximized.
@@ -235,7 +240,7 @@ impl DbProApp {
         self.handle_shortcuts(ctx);
     }
 
-    fn draw_shell(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn draw_shell(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         // eframe creates the root Ui before App::logic updates the global style.
         // Refresh its snapshot so panels inherit this frame's selected theme.
@@ -244,13 +249,17 @@ impl DbProApp {
         if !settings_mode || cfg!(target_os = "linux") {
             self.draw_topbar(ui);
         }
+        if !settings_mode {
+            // The status bar must anchor the very bottom edge of the window: egui
+            // gives the first-shown bottom panel the outermost position, so it is
+            // drawn before the shell output panel and cannot be lifted above it
+            // (#608 — the bar used to float above a background-colored panel).
+            self.draw_statusbar(ui);
+        }
         // Query owns its rich output dock and the Results workspace tab renders
         // the grid itself; the shell panel is for the remaining tabs.
         if !settings_mode && self.shows_shell_output_panel() {
             self.draw_output_panel(ui);
-        }
-        if !settings_mode {
-            self.draw_statusbar(ui);
         }
         let activity_context = activity_bar_view::ActivityBarContext {
             theme: self.theme,

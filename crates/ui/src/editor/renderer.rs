@@ -108,9 +108,14 @@ struct ImePreedit {
 impl ImePreedit {
     fn from_event(event: &egui::ImeEvent) -> Option<Self> {
         match event {
-            egui::ImeEvent::Preedit(text, cursor_range) => Some(Self {
+            egui::ImeEvent::Preedit { text, active_range_chars } => Some(Self {
                 text: text.clone(),
-                cursor_range: cursor_range.map(|(start, end)| (start.min(end), start.max(end))),
+                // egui 0.36 renamed the composition span to `active_range_chars`
+                // and made it a `Range`; keep the ordering guard so a reversed
+                // range still paints left-to-right.
+                cursor_range: active_range_chars
+                    .as_ref()
+                    .map(|range| (range.start.min(range.end), range.start.max(range.end))),
             }),
             _ => None,
         }
@@ -190,6 +195,21 @@ fn bind_editor_widget(ui: &mut Ui, editor_id: Id, viewport: Rect, auto_focus: bo
     }
     resp.widget_info(|| text_input_info(true, "SQL query editor"));
     let focused = resp.has_focus();
+    if focused {
+        // Tab advances snippet fields/completions and Escape closes popups — neither
+        // may eject the caret from the editor (#606). Called every focused frame;
+        // egui applies it from the frame after focus was gained, like TextEdit.
+        ui.memory_mut(|mem| {
+            mem.set_focus_lock_filter(
+                editor_id,
+                egui::EventFilter {
+                    escape: true,
+                    tab: true,
+                    ..Default::default()
+                },
+            );
+        });
+    }
     (resp, focused)
 }
 
@@ -394,7 +414,14 @@ impl<'a> SqlEditor<'a> {
         let line_before = self.cursor.line;
 
         self.paint_chrome(ui, viewport, m.gutter_w, focused);
-        ui.set_clip_rect(ui.clip_rect().intersect(viewport));
+        let viewport_clip = ui.clip_rect().intersect(viewport);
+        let content_clip = Rect::from_min_max(
+            Pos2::new(viewport.min.x + m.gutter_w, viewport.min.y),
+            Pos2::new(viewport.max.x, viewport.max.y),
+        );
+        // Content (text, squiggles, caret…) must never paint over the pinned
+        // line-number gutter while the document scrolls horizontally (#611).
+        ui.set_clip_rect(viewport_clip.intersect(content_clip));
 
         // Content coordinate space (scroll by translating origin).
         let rect = Rect::from_min_size(
@@ -454,6 +481,10 @@ impl<'a> SqlEditor<'a> {
             line_before,
             preedit_cursor.unwrap_or(cursor_screen),
         );
+
+        // Content passes are done — paint the pinned gutter strip on top.
+        ui.set_clip_rect(viewport_clip);
+        self.paint_gutter_numbers(ui, &frame);
 
         // Keep caret inside the viewport after edits / moves.
         scroll = self.scroll_caret_into_view(ui, &frame, scroll, max_scroll, cursor_screen);
@@ -747,7 +778,7 @@ impl<'a> SqlEditor<'a> {
     }
 
     /// Text lines + gutter numbers for the virtualized visible window only.
-    fn paint_visible_lines(&self, ui: &Ui, frame: &EditorFrame) {
+    fn visible_line_range(&self, frame: &EditorFrame) -> std::ops::Range<usize> {
         // Virtualized visible lines (frame.viewport ∩ scrolled content).
         let first_visible_line =
             (((frame.scroll.y - PADDING_TOP) / frame.line_height).floor() as isize).max(0) as usize;
@@ -755,12 +786,14 @@ impl<'a> SqlEditor<'a> {
         let last_visible_line =
             ((((frame.scroll.y + frame.viewport.height() - PADDING_TOP) / frame.line_height).ceil() as usize) + 2)
                 .min(frame.line_count);
+        first_visible_line..last_visible_line
+    }
 
-        // Render Visible Text Lines & Gutter Numbers
-        for line_idx in first_visible_line..last_visible_line {
+    /// Paint the line-number gutter. Drawn *after* the text passes so the
+    /// pinned strip paints on top of anything that reached its edge (#611).
+    fn paint_gutter_numbers(&self, ui: &Ui, frame: &EditorFrame) {
+        for line_idx in self.visible_line_range(frame) {
             let line_y = frame.rect.min.y + PADDING_TOP + (line_idx as f32) * frame.line_height;
-
-            // Gutter Line Number
             let line_num_str = format!("{}", line_idx + 1);
             let is_curr = line_idx == self.cursor.line;
             ui.painter().text(
@@ -773,7 +806,12 @@ impl<'a> SqlEditor<'a> {
                 FontId::monospace((self.font_size - 1.5).clamp(11.0, 14.0)),
                 self.theme.editor_line_number(is_curr),
             );
+        }
+    }
 
+    fn paint_visible_lines(&self, ui: &Ui, frame: &EditorFrame) {
+        for line_idx in self.visible_line_range(frame) {
+            let line_y = frame.rect.min.y + PADDING_TOP + (line_idx as f32) * frame.line_height;
             let line_text = self.buffer.line_at(line_idx).unwrap_or("");
             if !line_text.is_empty() {
                 let galley = layout_line(
@@ -1043,7 +1081,8 @@ impl<'a> SqlEditor<'a> {
             // — only an `Arc` reference (#581).
             return (highlighter, cache.shared(buffer, self.dialect));
         }
-        (highlighter, highlighter.tokenize(self.buffer.text()).into())
+        let tokens = highlighter.tokenize(self.buffer.text()).into();
+        (highlighter, tokens)
     }
 
     /// Scroll just enough that the caret stays inside the viewport, then persist.

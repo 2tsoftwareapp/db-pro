@@ -230,13 +230,16 @@ impl TableDataState {
             self.grid_column_widths = self.column_widths(result.columns.len(), self.last_available_width);
         }
         let column = &result.columns[column_index];
-        let content_width = indexes
+        // The widest sample decides the width, and the padding is added once
+        // afterwards: folding it into the seed only padded the header (#575).
+        let widest = indexes
             .iter()
             .take(AUTO_SIZE_SAMPLE_ROWS)
             .filter_map(|row_index| result.rows.get(*row_index).and_then(|row| row.get(column_index)))
             // `cell_text_as_str` borrows — no allocation per sampled row.
             .map(|cell| measured_text_width(crate::cell_text_as_str(cell)))
-            .fold(measured_text_width(&column.name) + AUTO_SIZE_PADDING, f32::max);
+            .fold(measured_text_width(&column.name), f32::max);
+        let content_width = widest + AUTO_SIZE_PADDING;
         self.grid_column_widths[column_index] = content_width.clamp(AUTO_SIZE_MIN_WIDTH, AUTO_SIZE_MAX_WIDTH);
         self.grid_columns_user_resized = true;
     }

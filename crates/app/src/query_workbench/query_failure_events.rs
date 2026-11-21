@@ -26,6 +26,8 @@ pub(super) fn on_query_failed(
         workspace,
         feedback,
     } = context;
+    // #603: never surface a raw connection UUID to the user.
+    let message = super::query_view::friendly_connection_error(&message);
     if let Some((document_id, _)) = query_session.save_requests.remove(&request_id) {
         if query_session.pending_close_after_save.is_some_and(|index| {
             query_session

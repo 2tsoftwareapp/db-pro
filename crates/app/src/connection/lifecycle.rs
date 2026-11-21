@@ -48,6 +48,10 @@ pub(crate) struct ConnectionLifecycleState {
     #[cfg(not(test))]
     failed_connection_ids: HashSet<String>,
     #[cfg(test)]
+    pub(in crate::app) live_connection_ids: HashSet<String>,
+    #[cfg(not(test))]
+    live_connection_ids: HashSet<String>,
+    #[cfg(test)]
     pub(in crate::app) connections_requested: bool,
     #[cfg(not(test))]
     connections_requested: bool,
@@ -188,6 +192,21 @@ impl ConnectionLifecycleState {
     pub(crate) fn record_connection_failure(&mut self, connection_id: String, message: String) {
         self.failed_connection_ids.insert(connection_id.clone());
         self.errors.insert(connection_id, message);
+    }
+
+    /// Sessions the runtime still holds open, including sessions behind a query
+    /// tab that lost the global active slot. The sidebar must not call those
+    /// "Disconnected" while a bound tab can still run against them (#603).
+    pub(crate) fn note_session_opened(&mut self, connection_id: &str) {
+        self.live_connection_ids.insert(connection_id.to_owned());
+    }
+
+    pub(crate) fn note_session_closed(&mut self, connection_id: &str) {
+        self.live_connection_ids.remove(connection_id);
+    }
+
+    pub(crate) fn has_live_session(&self, connection_id: &str) -> bool {
+        self.live_connection_ids.contains(connection_id)
     }
 
     pub(crate) fn clear_connection_error(&mut self, connection_id: &str) {

@@ -353,8 +353,9 @@ pub(super) fn spawn_task_task(command_line: String, cwd: PathBuf) -> std::io::Re
     spawn_task_reader(child.clone(), sender.clone());
     // The reaper must be the only thread that calls `wait()`: a second wait
     // would race the reader that owns stdout/stderr draining.
+    let reaper_child = std::sync::Arc::clone(&child);
     std::thread::spawn(move || {
-        let status = child.lock().ok().and_then(|mut child| child.wait().ok());
+        let status = reaper_child.lock().ok().and_then(|mut child| child.wait().ok());
         let _ = sender.send(TaskEvent::Exit(status.and_then(|status| status.code())));
     });
     Ok(WorkspaceTaskHandle {
@@ -369,12 +370,7 @@ fn spawn_task_reader(
     child: std::sync::Arc<std::sync::Mutex<std::process::Child>>,
     sender: std::sync::mpsc::Sender<TaskEvent>,
 ) {
-    let mut taken = child.lock().ok().and_then(|mut child| {
-        Some((
-            child.stdout.take(),
-            child.stderr.take(),
-        ))
-    });
+    let mut taken = child.lock().ok().map(|mut child| (child.stdout.take(), child.stderr.take()));
     let (stdout, stderr) = match taken.take() {
         Some((stdout, stderr)) => (stdout, stderr),
         None => return,

@@ -3,6 +3,19 @@
         maintenance_command, workload_command, MonitoringActivityContext, MonitoringState, RequestId, UiCommand,
     };
 
+    /// Block until the workspace read/task workers publish their results (#579).
+    fn drain_workspace_workers(
+        files: &mut super::super::workspace_files_state::WorkspaceFilesState,
+        feedback: &mut crate::app::feedback_state::FeedbackState,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while files.background_tasks_in_flight() && std::time::Instant::now() < deadline {
+            files.poll_read_task(feedback);
+            files.poll_task(feedback);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     #[test]
     fn workload_command_uses_state_sort_and_bounded_limit() {
         let state = MonitoringState {
@@ -248,6 +261,9 @@
         assert!(files.pending_replace_all);
         assert!(std::fs::read_to_string(&sql_path).unwrap().contains("users"));
         files.confirm_replace_all(&mut feedback);
+        // #579: the replace runs on a worker thread so the frame loop keeps
+        // painting; drain it here instead of expecting a synchronous write.
+        drain_workspace_workers(&mut files, &mut feedback);
         let replaced = std::fs::read_to_string(&sql_path).unwrap();
         assert!(replaced.contains("accounts"), "{replaced}");
         assert!(!files.pending_replace_all);
@@ -257,6 +273,7 @@
         assert!(files.pending_shell);
         assert!(files.ide_workspace.last_task.is_none());
         files.confirm_shell(&mut feedback);
+        drain_workspace_workers(&mut files, &mut feedback);
         let result = files.ide_workspace.last_task.as_ref().expect("confirmed shell ran");
         assert_eq!(result.command, "echo shell-confirmed");
         assert!(result.exit_code.is_some());

@@ -237,8 +237,8 @@ impl DbProApp {
         connection_status::runtime_status(&self.feedback, self.theme, self.workspace.activity)
     }
 
-    pub(super) fn statusbar_state(&self) -> (Icon, egui::Color32, &'static str) {
-        connection_status::statusbar_state(&self.connection.lifecycle, &self.feedback, self.theme)
+    pub(super) fn statusbar_state(&self, shown_connected: bool) -> (Icon, egui::Color32, &'static str) {
+        connection_status::statusbar_state(shown_connected, &self.feedback, self.theme)
     }
 
     pub(super) fn shows_editor_status(&self) -> bool {
