@@ -4759,7 +4759,8 @@ fn test_export_result_writes_escaped_delimited_text() {
     let written = std::fs::read_to_string(&path).expect("export file must exist");
     let _ = std::fs::remove_file(&path);
     assert_eq!(
-        written, "note,amount\n\"line, one\ntwo\",42.50\n\\N,9007199254740993\n",
+    // #612: CSV bắt đầu bằng BOM UTF-8 cho Excel; so sánh phần payload.
+        written.trim_start_matches('\u{feff}'), "note,amount\n\"line, one\ntwo\",42.50\n\\N,9007199254740993\n",
         "NULL is the \\N sentinel, the exact digits survive, and the embedded newline stays quoted"
     );
 }
