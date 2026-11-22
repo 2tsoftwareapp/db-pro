@@ -175,7 +175,9 @@ mod export_tests {
         app.export_result(&result);
         app.export_result_confirming_overwrite(&result);
 
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "id\n1\n");
+        // #612: CSV files now start with a UTF-8 BOM, so compare the payload.
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(written.trim_start_matches('\u{feff}'), "id\n1\n");
         assert_ne!(
             std::fs::metadata(&path).expect("metadata").ino(),
             inode_before,
@@ -184,6 +186,83 @@ mod export_tests {
         );
         assert_eq!(dir_entries(&dir), vec!["out.csv".to_owned()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #612: CSV export phải mở đầu bằng BOM UTF-8 để Excel (locale vi-VN) đọc
+    /// đúng tiếng Việt; các format khác không được thêm BOM.
+    #[test]
+    fn csv_export_starts_with_a_utf8_bom_612() {
+        let dir = temp_dir("bom");
+        for (format, file, wants_bom) in [
+            (ExportFormat::Csv, "out.csv", true),
+            (ExportFormat::Tsv, "out.tsv", false),
+            (ExportFormat::Json, "out.json", false),
+        ] {
+            let path = dir.join(file);
+            let mut app = DbProApp {
+                overlay: OverlayState {
+                    export_open: true,
+                    export_path: path.to_string_lossy().into_owned(),
+                    export_format: format,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let result = UiQueryResult {
+                columns: vec![crate::UiColumn {
+                    name: "name".to_owned(),
+                    data_type: "text".to_owned(),
+                    nullable: false,
+                }],
+                rows: vec![vec![UiCell::Text("Nguyễn Văn An".to_owned())]],
+                row_count: 1,
+                duration_ms: 0,
+            };
+            app.export_result(&result);
+
+            let bytes = std::fs::read(&path).expect("exported file");
+            let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+            assert_eq!(has_bom, wants_bom, "{file} BOM mismatch");
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(text.contains("Nguyễn Văn An"), "{file} lost its text: {text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #612: dialog không được mở với ô Output file trống.
+    #[test]
+    fn export_dialog_prefills_a_default_path_612() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        let path = app.overlay.export_path.clone();
+        assert!(path.ends_with(".csv"), "default path must carry the format extension: {path}");
+        assert!(
+            std::path::Path::new(&path).is_absolute(),
+            "default path must be usable without typing: {path}"
+        );
+        assert!(path.contains("results"), "unnamed result falls back to a readable stem: {path}");
     }
 
     /// #616: dialog Export phải thật sự được dựng, không chỉ set cờ. UAT headless
@@ -279,7 +358,9 @@ mod export_tests {
 
         assert!(app.overlay.export_overwrite_pending.is_none());
         assert!(!app.overlay.export_open);
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "id\n1\n");
+        // #612: CSV files now start with a UTF-8 BOM, so compare the payload.
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(written.trim_start_matches('\u{feff}'), "id\n1\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -9,6 +9,29 @@ fn export_table_name_or_placeholder(name: &str) -> &str {
     if name.is_empty() { "exported_rows" } else { name }
 }
 
+/// `~/Downloads/<name>_<timestamp>.<ext>` — the target a dialog that opens
+/// without a path starts with (#612), instead of an empty field.
+fn default_export_path(table_name: &str, format: ExportFormat) -> String {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let file_name = format!("{}_{stamp}.{}", export_stem(table_name), format.extension());
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return file_name;
+    };
+    let downloads = home.join("Downloads");
+    let dir = if downloads.is_dir() { downloads } else { home };
+    dir.join(file_name).to_string_lossy().into_owned()
+}
+
+/// Filesystem-safe stem that still reads like the table name.
+fn export_stem(table_name: &str) -> String {
+    let cleaned: String = table_name
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || matches!(ch, '-' | '_') { ch } else { '_' })
+        .collect();
+    let trimmed = cleaned.trim_matches('_');
+    if trimmed.is_empty() { "results".to_owned() } else { trimmed.to_owned() }
+}
+
 impl DbProApp {
     /// Held destructive statements render as a ctx-level overlay so the
     /// confirmation can't be stranded inside a closed Results dock or a
@@ -104,6 +127,15 @@ impl DbProApp {
             self.overlay.export_table_name = self
                 .export_source_table_name()
                 .unwrap_or_default();
+        }
+        // #612: a dialog that opens with an empty Output file makes the user
+        // invent an absolute path. Pre-fill `~/Downloads/<name>_<timestamp>` and
+        // let them overwrite it; the extension follows the chosen format.
+        if self.overlay.export_path.trim().is_empty() {
+            self.overlay.export_path = default_export_path(
+                self.overlay.export_table_name.trim(),
+                self.overlay.export_format,
+            );
         }
         let result = self.overlay.export_snapshot.clone();
         // COPY … FROM stdin is a PostgreSQL script; hide it for other drivers and
@@ -300,6 +332,17 @@ impl DbProApp {
                 ExportFormat::Excel => unreachable!("excel handled above"),
             }
             .into_bytes()
+        };
+        // #612: Excel on a vi-VN locale reads a BOM-less CSV as the system
+        // codepage, so Vietnamese text arrives as mojibake. TSV/JSON/SQL stay
+        // BOM-less — they are consumed by tools, not by a spreadsheet.
+        let output = if self.overlay.export_format == ExportFormat::Csv {
+            let mut with_bom = Vec::with_capacity(output.len() + 3);
+            with_bom.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+            with_bom.extend_from_slice(&output);
+            with_bom
+        } else {
+            output
         };
         let exported_rows = result.rows.len();
         match write_file_atomically(&path, &output) {
