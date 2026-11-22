@@ -35,6 +35,28 @@ fn redact_strips_password_material() {
     assert!(msg.contains("[redacted]"));
 }
 
+/// #609: the FAIL line must keep PostgreSQL's own wording; only credentials
+/// disappear. `password authentication failed for user …` is a reason, not a
+/// secret.
+#[test]
+fn redact_keeps_the_failure_reason_and_drops_only_credentials() {
+    let auth = "password authentication failed for user \"dbpro\"";
+    assert_eq!(redact_diag_message(auth), auth);
+
+    for raw in [
+        "connection failed password=hunter2 rest",
+        "connection failed password = hunter2",
+        "CREATE ROLE app PASSWORD 'hunter2'",
+        "auth failed pwd=hunter2",
+        "ssh key rejected: private_key /tmp/id_ed25519",
+        "host key mismatch BEGIN RSA PRIVATE KEY",
+    ] {
+        let redacted = redact_diag_message(raw);
+        assert!(redacted.contains("[redacted]"), "{raw:?} not redacted: {redacted}");
+        assert!(!redacted.contains("hunter2"), "{raw:?} leaked: {redacted}");
+    }
+}
+
 #[test]
 fn probe_reports_tcp_failure_without_auth() {
     let report = probe_network_stages(&base_config());

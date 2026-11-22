@@ -324,18 +324,20 @@
             ide_workspace_scan::spawn_task_task("echo hello-db-pro".to_owned(), cwd.clone()).unwrap();
         let mut lines = Vec::new();
         let mut code = None;
-        // The worker signals Exit last, so this terminates.
-        for _ in 0..200 {
-            match handle.receiver.try_recv() {
+        // The worker signals Exit last, so this terminates. Wait on a wall-clock
+        // deadline: under a fully parallel `cargo test` the shell can take
+        // seconds to start, and a fixed iteration count turned this into a flaky
+        // failure.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match handle.receiver.recv_timeout(std::time::Duration::from_millis(200)) {
                 Ok(ide_workspace_scan::TaskEvent::Line(line)) => lines.push(line),
                 Ok(ide_workspace_scan::TaskEvent::Exit(exit)) => {
                     code = Some(exit);
                     break;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
         assert_eq!(code, Some(Some(0)));
