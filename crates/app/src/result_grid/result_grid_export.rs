@@ -105,8 +105,21 @@ pub(super) fn format_cell_delimited_with(
     delimiter: char,
     safety: DelimitedSafety,
 ) -> String {
+    format_cell_delimited_with_null(cell, delimiter, safety, NULL_SENTINEL)
+}
+
+/// [`format_cell_delimited_with`] with an explicit spelling for NULL (#612).
+///
+/// `NULL_SENTINEL` keeps the `\N` round-trip contract for `COPY`-style re-import
+/// (#487); an empty string is what a spreadsheet user expects from a CSV.
+pub(super) fn format_cell_delimited_with_null(
+    cell: &UiCell,
+    delimiter: char,
+    safety: DelimitedSafety,
+    null_text: &str,
+) -> String {
     match cell {
-        UiCell::Null => "\\N".to_owned(),
+        UiCell::Null => null_text.to_owned(),
         UiCell::Boolean(value) => value.to_string(),
         UiCell::Number(value) => escape_delimited_field_with(value, delimiter, safety),
         UiCell::Text(value) => escape_delimited_field_with(value, delimiter, safety),
@@ -195,7 +208,19 @@ fn write_excel_number(
     worksheet.write_string(row, column, value).map(|_| ())
 }
 
+/// The Postgres `COPY` sentinel (#487).
+pub(super) const NULL_SENTINEL: &str = "\\N";
+
 pub(super) fn format_result_delimited(result: &UiQueryResult, delimiter: &str) -> String {
+    format_result_delimited_with_null(result, delimiter, NULL_SENTINEL)
+}
+
+/// [`format_result_delimited`] with an explicit NULL spelling (#612).
+pub(super) fn format_result_delimited_with_null(
+    result: &UiQueryResult,
+    delimiter: &str,
+    null_text: &str,
+) -> String {
     let separator = delimiter.chars().next().unwrap_or(',');
     let mut output = result
         .columns
@@ -207,7 +232,7 @@ pub(super) fn format_result_delimited(result: &UiQueryResult, delimiter: &str) -
     for row in &result.rows {
         output.push_str(
             &row.iter()
-                .map(|cell| format_cell_delimited(cell, separator))
+                .map(|cell| format_cell_delimited_with_null(cell, separator, DelimitedSafety::ExcelSafe, null_text))
                 .collect::<Vec<_>>()
                 .join(delimiter),
         );

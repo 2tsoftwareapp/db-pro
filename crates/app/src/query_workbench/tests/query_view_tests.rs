@@ -59,7 +59,7 @@ mod egress_tests {
 
 mod export_tests {
     use super::super::*;
-    use crate::app::overlay_state::ExportFormat;
+    use crate::app::overlay_state::{ExportFormat, ExportNullMode};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -263,6 +263,55 @@ mod export_tests {
             "default path must be usable without typing: {path}"
         );
         assert!(path.contains("results"), "unnamed result falls back to a readable stem: {path}");
+    }
+
+    /// #612: NULL được viết theo lựa chọn — mặc định CSV là ô rỗng, `\N` vẫn
+    /// chọn được để round-trip `COPY` (#487).
+    #[test]
+    fn delimited_export_null_spelling_follows_the_selected_mode_612() {
+        let dir = temp_dir("null-mode");
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "value".to_owned(),
+                data_type: "text".to_owned(),
+                nullable: true,
+            }],
+            rows: vec![
+                vec![UiCell::Null],
+                vec![UiCell::Text(String::new())],
+            ],
+            row_count: 2,
+            duration_ms: 0,
+        };
+
+        for (mode, expected) in [
+            (ExportNullMode::Empty, "value\n\n\n"),
+            (ExportNullMode::Literal, "value\nNULL\n\n"),
+            (ExportNullMode::Sentinel, "value\n\\N\n\n"),
+        ] {
+            let file = format!("out-{}.csv", mode.label().replace('\\', "sentinel"));
+            let path = dir.join(file);
+            let mut app = DbProApp {
+                overlay: OverlayState {
+                    export_open: true,
+                    export_path: path.to_string_lossy().into_owned(),
+                    export_format: ExportFormat::Csv,
+                    export_null: mode,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            app.export_result(&result);
+
+            let written = std::fs::read_to_string(&path).expect("exported file");
+            assert_eq!(
+                written.trim_start_matches('\u{feff}'),
+                expected,
+                "mode {:?} spelled NULL wrong",
+                mode
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #616: dialog Export phải thật sự được dựng, không chỉ set cờ. UAT headless

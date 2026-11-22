@@ -325,9 +325,10 @@ impl DbProApp {
                 ),
                 ExportFormat::Json => result_grid_export::format_result_json(result),
                 ExportFormat::Markdown => result_grid_export::format_result_markdown(result),
-                ExportFormat::Csv | ExportFormat::Tsv => result_grid_export::format_result_delimited(
+                ExportFormat::Csv | ExportFormat::Tsv => result_grid_export::format_result_delimited_with_null(
                     result,
                     self.overlay.export_format.delimiter().unwrap_or(","),
+                    self.overlay.export_null.text(),
                 ),
                 ExportFormat::Excel => unreachable!("excel handled above"),
             }
