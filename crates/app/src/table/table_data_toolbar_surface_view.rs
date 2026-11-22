@@ -63,7 +63,7 @@ pub(super) fn draw_toolbar(
     let mut action = None;
     toolbar_frame(context.theme).show(ui, |ui| {
         ui.vertical(|ui| {
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 action = context.draw_mutation_controls(ui);
                 let export_clicked = Button::new(context.theme)
                     .text(t!("query.export_results"))
@@ -80,6 +80,14 @@ pub(super) fn draw_toolbar(
                     action = query_action;
                 }
             });
+            // A pending staged-apply failure renders as its own full-width
+            // inline strip — visible until resolved, never pushing the WHERE
+            // row around (#610).
+            if let Some(banner_action) = context.draw_failure_banner(ui) {
+                if action.is_none() {
+                    action = Some(banner_action);
+                }
+            }
         });
     });
     let filter_action = context.draw_filter_chips(ui);
@@ -124,6 +132,24 @@ impl TableDataToolbarContext<'_> {
             selected_rows: self.selected_rows,
         };
         table_data_mutation_toolbar_view::draw_mutation_controls(&context, ui).map(Into::into)
+    }
+
+    fn draw_failure_banner(&mut self, ui: &mut egui::Ui) -> Option<TableDataToolbarAction> {
+        self.failure?;
+        ui.add_space(SPACE_XS);
+        let context = table_data_mutation_toolbar_view::TableDataMutationToolbarContext {
+            theme: self.theme,
+            can_mutate: self.can_mutate,
+            connected: self.connected,
+            has_primary_key: self.has_primary_key,
+            read_only_notice: None,
+            staged_changes: self.staged_changes,
+            staged_apply_pending: self.staged_apply_pending,
+            has_data_edit_error: self.has_data_edit_error,
+            failure: self.failure,
+            selected_rows: self.selected_rows,
+        };
+        table_data_mutation_toolbar_view::draw_failure_banner(&context, ui).map(Into::into)
     }
 
     fn draw_footer_mutation_controls(&mut self, ui: &mut egui::Ui) -> Option<TableDataToolbarAction> {
@@ -187,7 +213,9 @@ impl TableDataToolbarContext<'_> {
         }
         let draft_before_edit = self.data_query.sql_condition_draft.clone();
         ui.add_space(SPACE_XS);
-        let editor_width = (ui.available_rect_before_wrap().width() - 92.0).max(160.0);
+        // Keep the WHERE field useful even with the mutation controls visible;
+        // it must never shrink below 240 px while an error is pending (#610).
+        let editor_width = (ui.available_rect_before_wrap().width() - 92.0).max(240.0);
         let control_height = crate::components::button::SizeTokens::from_size(ButtonSize::Sm).min_height;
         if std::env::var_os("DB_PRO_CAPTURE_TABLE_COMPLETION").is_some() {
             let mut state = egui::text_edit::TextEditState::load(ui.ctx(), editor_id).unwrap_or_default();

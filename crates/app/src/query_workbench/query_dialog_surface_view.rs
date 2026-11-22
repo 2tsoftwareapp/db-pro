@@ -1,6 +1,6 @@
 use super::query_execution_state::PendingDestructiveRun;
 use super::*;
-use crate::app::overlay_state::ExportFormat;
+use crate::app::overlay_state::{ExportFormat, ExportNullMode};
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use egui::RichText;
 
@@ -131,6 +131,11 @@ impl ExportDialogContext<'_> {
         );
         ui.add_space(SPACE_XS);
         self.draw_format_picker(ui);
+        // #612: NULL spelling only matters for delimited formats.
+        if matches!(self.overlay.export_format, ExportFormat::Csv | ExportFormat::Tsv) {
+            ui.add_space(SPACE_XS);
+            self.draw_null_picker(ui);
+        }
         ui.add_space(SPACE_SM);
         self.draw_output_fields(ui, action);
         ui.add_space(SPACE_XS);
@@ -174,6 +179,8 @@ impl ExportDialogContext<'_> {
         // #539: a path typed after the prompt appeared is a different destination.
         if self.overlay.export_path != path_before {
             self.overlay.export_overwrite_pending = None;
+            // #621: an edited path is the user's choice and survives the next open.
+            self.overlay.export_path_is_default = false;
         }
         self.draw_effective_path_hint(ui);
         if matches!(self.overlay.export_format, ExportFormat::SqlInsert | ExportFormat::SqlCopy) {
@@ -224,6 +231,44 @@ impl ExportDialogContext<'_> {
                     self.overlay.export_format = format;
                     // #539: the prompt named the previous format's effective path.
                     self.overlay.export_overwrite_pending = None;
+                }
+            }
+        });
+    }
+
+    /// NULL spelling for CSV/TSV (#612): empty, the word `NULL`, or the `\N`
+    /// sentinel that keeps a `COPY` round-trip lossless (#487).
+    fn draw_null_picker(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(t!("query.export_null_label"))
+                    .font(font_caption())
+                    .color(self.theme.text_muted),
+            );
+            for mode in [
+                ExportNullMode::Empty,
+                ExportNullMode::Literal,
+                ExportNullMode::Sentinel,
+            ] {
+                let selected = self.overlay.export_null == mode;
+                let label = match mode {
+                    ExportNullMode::Empty => t!("query.export_null_empty").to_string(),
+                    ExportNullMode::Literal => mode.label().to_owned(),
+                    ExportNullMode::Sentinel => mode.label().to_owned(),
+                };
+                if Button::new(self.theme)
+                    .text(label)
+                    .variant(if selected {
+                        ButtonVariant::Secondary
+                    } else {
+                        ButtonVariant::Ghost
+                    })
+                    .size(ButtonSize::Sm)
+                    .show(ui)
+                    .clicked()
+                    && !selected
+                {
+                    self.overlay.export_null = mode;
                 }
             }
         });

@@ -173,7 +173,7 @@ impl DbProApp {
         match action {
             Some(result_grid_inspector_surface_view::ValueInspectorAction::CopyRaw) => {
                 ctx.copy_text(self.table.editing.data_edit_value.clone());
-                self.feedback.runtime_message = "Copied raw value".into();
+                self.feedback.runtime_message = t!("explorer.copy_raw_value").to_string();
             }
             Some(result_grid_inspector_surface_view::ValueInspectorAction::ExportBytes) => {
                 self.export_inspected_bytes();

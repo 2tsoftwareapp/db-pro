@@ -163,3 +163,36 @@ fn identical_log_lines_get_distinct_ids_within_a_file() {
     let ids: std::collections::BTreeSet<&str> = page.events.iter().map(|event| event.id.as_str()).collect();
     assert_eq!(ids.len(), 3);
 }
+
+/// #599: query history must not keep credentials verbatim.
+#[test]
+fn history_redaction_masks_every_credential_form_599() {
+    use crate::application::history_sql_for_test;
+
+    for (sql, must_not_contain) in [
+        ("CREATE ROLE app LOGIN PASSWORD 'S3cr3t!'", "S3cr3t!"),
+        ("ALTER USER x WITH PASSWORD 'hunter2'", "hunter2"),
+        (
+            "CREATE USER MAPPING FOR u SERVER s OPTIONS (user 'u', password 'mappingpw')",
+            "mappingpw",
+        ),
+        (
+            "SELECT dblink_connect('host=db password=dblinkpw');",
+            "dblinkpw",
+        ),
+        (
+            "CREATE SUBSCRIPTION sub CONNECTION 'host=db password=subpw' PUBLICATION p;",
+            "subpw",
+        ),
+    ] {
+        let redacted = history_sql_for_test(sql);
+        assert!(
+            !redacted.contains(must_not_contain),
+            "{must_not_contain} survived: {redacted}"
+        );
+    }
+
+    // Statements without secrets are stored unchanged so history stays recognisable.
+    let plain = "SELECT id, name FROM users WHERE id = 42;";
+    assert_eq!(history_sql_for_test(plain), plain);
+}

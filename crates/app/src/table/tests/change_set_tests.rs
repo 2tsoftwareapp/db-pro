@@ -6,6 +6,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("1".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(1),
             column_index: 2,
@@ -21,10 +22,12 @@
         let id_a = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("1".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let id_b = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("2".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let mut changes = ChangeSet::new();
         changes.stage_update(StagedChange::Update {
@@ -79,6 +82,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("1".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(99),
             column_index: 3,
@@ -98,10 +102,12 @@
         let first = RowIdentity {
             original_pk_columns: vec!["tenant_id".to_owned(), "item_id".to_owned()],
             original_pk_values: vec![UiCell::Number("1".to_owned()), UiCell::Number("10".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let second = RowIdentity {
             original_pk_columns: first.original_pk_columns.clone(),
             original_pk_values: vec![UiCell::Number("1".to_owned()), UiCell::Number("11".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         changes.stage_update(StagedChange::Update {
             identity: first.clone(),
@@ -132,6 +138,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         changes.stage_update(StagedChange::Update {
             identity: identity.clone(),
@@ -154,6 +161,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("1".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
 
         assert!(changes.revert_cell(&identity, 2));
@@ -168,6 +176,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("1".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(1),
             column_index: 3,
@@ -181,6 +190,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("1".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(42),
         });

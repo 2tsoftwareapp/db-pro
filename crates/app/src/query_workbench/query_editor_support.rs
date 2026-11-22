@@ -409,16 +409,26 @@ pub(super) fn draw_signature_help(
         });
 }
 
+/// Single shared close path for the SQL completion popup (#607).
+///
+/// Every close site — run dispatch, apply, the surface paint pass, and the
+/// floating popup — routes through this one implementation so the close
+/// semantics cannot drift between call sites. Callers that also need to
+/// re-arm the auto-open timer do so explicitly after closing.
+pub(super) fn close_completion(doc: &mut QueryDocument) {
+    doc.completion.close();
+}
+
 pub(super) fn apply_completion_item(doc: &mut QueryDocument, item: &CompletionItem, dialect: SqlDialect) -> bool {
     if !doc.completion.can_apply_to_version(doc.buffer.version()) {
-        doc.completion.close();
+        close_completion(doc);
         return false;
     }
 
     let (start, end) = item.replacement_range;
     let source = doc.buffer.text();
     if start > end || end > source.len() || !source.is_char_boundary(start) || !source.is_char_boundary(end) {
-        doc.completion.close();
+        close_completion(doc);
         return false;
     }
 
@@ -432,7 +442,7 @@ pub(super) fn apply_completion_item(doc: &mut QueryDocument, item: &CompletionIt
     doc.reanalyze(dialect);
     doc.dirty = true;
     doc.prediction = None;
-    doc.completion.close();
+    close_completion(doc);
     // The surface timer already opens completion once `completion_due_at` is due.
     if item.insert_text.ends_with('.') {
         doc.completion_due_at = Some(std::time::Instant::now());

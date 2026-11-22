@@ -153,6 +153,8 @@ pub struct ConnectionSummary {
     /// edit or duplicate round-trip cannot silently replace it with a default.
     pub ssl_mode: db_pro_core::domain::connection::SslMode,
     pub readonly: bool,
+    /// SQLite: the saved "create the database file if it is missing" choice (#597).
+    pub create_if_missing: bool,
     pub tags: Vec<String>,
     pub group: Option<String>,
     pub favorite: bool,
@@ -882,6 +884,7 @@ fn summary_from_connection(connection: db_pro_core::domain::connection::Connecti
         },
         ssl_mode: connection.config.ssl_mode,
         readonly: connection.config.readonly,
+        create_if_missing: connection.config.create_if_missing,
         tags: connection.config.tags,
         group: connection.config.group,
         favorite: connection.config.favorite,

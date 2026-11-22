@@ -28,7 +28,7 @@ fn data_tab_app(result: Option<UiQueryResult>) -> DbProApp {
     let mut app = DbProApp::default();
     app.workspace.active_tab = WorkspaceTab::Table;
     app.table.state.table_view = TableView::Data;
-    app.table.data_query.result = result;
+    app.table.data_query.result = result.map(std::rc::Rc::new);
     app
 }
 
@@ -76,7 +76,7 @@ fn data_tab_exports_visible_rows_as_excel() {
     let path_text = path.to_string_lossy().into_owned();
     app.overlay.export_format = crate::app::overlay_state::ExportFormat::Excel;
     app.overlay.export_path = path_text.clone();
-    let result = app.table.data_query.result.clone().expect("data tab rows");
+    let result = app.table.data_query.result_ref().cloned().expect("data tab rows");
     app.export_result(&result);
 
     assert!(!app.overlay.export_open);

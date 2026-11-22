@@ -96,7 +96,7 @@ fn synthetic_outcome(next_index: usize, cancel_midway: bool) -> TransferHarnessO
     }
     TransferHarnessOutcome {
         message: format!(
-            "Transfer {} · {:?} · wrote {}",
+            "Transfer {} · {} · wrote {}",
             job.id, job.status, job.progress.rows_written
         ),
         jobs: vec![job],
@@ -140,7 +140,7 @@ fn csv_export_outcome(next_index: usize) -> TransferHarnessOutcome {
         }
     }
     TransferHarnessOutcome {
-        message: format!("CSV transfer {} · {:?} · {}", job.id, job.status, path.display()),
+        message: format!("CSV transfer {} · {} · {}", job.id, job.status, path.display()),
         jobs: vec![job],
         copy_body: None,
         masking_error: None,
@@ -180,7 +180,11 @@ fn csv_import_preview_outcome(next_index: usize) -> TransferHarnessOutcome {
             Ok(rows) => {
                 job.status = TransferStatus::Succeeded;
                 job.progress.rows_read = rows.len() as u64;
-                job.progress.message = format!("headers={:?}; preview {} row(s)", source.headers(), rows.len());
+                job.progress.message = format!(
+                    "headers={}; preview {} row(s)",
+                    source.headers().join(", "),
+                    rows.len()
+                );
             }
             Err(err) => {
                 job.status = TransferStatus::Failed;
@@ -224,7 +228,7 @@ fn jsonl_export_outcome(next_index: usize) -> TransferHarnessOutcome {
         }
     }
     TransferHarnessOutcome {
-        message: format!("JSONL {} · {:?}", job.id, job.status),
+        message: format!("JSONL {} · {}", job.id, job.status),
         jobs: vec![job],
         copy_body: None,
         masking_error: None,
@@ -255,7 +259,7 @@ fn excel_export_outcome(next_index: usize) -> TransferHarnessOutcome {
         }
     }
     TransferHarnessOutcome {
-        message: format!("Excel {} · {:?}", job.id, job.status),
+        message: format!("Excel {} · {}", job.id, job.status),
         jobs: vec![job],
         copy_body: None,
         masking_error: None,

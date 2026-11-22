@@ -3,8 +3,8 @@ use db_pro_core::domain::connection::ConnectionHandle;
 use db_pro_core::domain::error::DbError;
 use db_pro_core::domain::query::{CellValue, Row};
 use db_pro_core::domain::schema::{
-    CheckConstraint, Column, ForeignKey, Function, Index, IndexOrigin, IntrospectResult, PrimaryKey, RoutineParameter,
-    Schema, Table, Trigger, View,
+    CheckConstraint, Column, ForeignKey, Function, Index, IndexOrigin, IntrospectResult, PrimaryKey, RelationKind,
+    RoutineParameter, Schema, Table, Trigger, View,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +67,9 @@ impl SqlServerIntrospect {
             views,
             triggers,
             functions,
+            // SQL Server keeps the definition in sys.sql_modules, not as a
+            // provider-stored CREATE TABLE text (#596 is SQLite-only).
+            table_definition_sql: Vec::new(),
         })
     }
 }
@@ -328,6 +331,7 @@ async fn load_views(connector: &SqlServerConnector, handle: &ConnectionHandle) -
                 schema: text(row, 0)?,
                 name: text(row, 1)?,
                 definition: text(row, 2)?,
+                kind: RelationKind::View,
             })
         })
         .collect()

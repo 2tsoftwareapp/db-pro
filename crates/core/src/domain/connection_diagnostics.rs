@@ -62,14 +62,49 @@ impl ConnectionDiagnosticsReport {
 
 /// Redact common secret patterns from diagnostic text.
 pub fn redact_diag_message(raw: &str) -> String {
-    let mut out = raw.to_owned();
-    for needle in ["password=", "PASSWORD ", "private_key", "BEGIN RSA", "BEGIN OPENSSH"] {
-        if let Some(idx) = out.to_ascii_lowercase().find(&needle.to_ascii_lowercase()) {
-            out = format!("{}[redacted]", &out[..idx]);
+    // Redact a credential *value*, never the prose around it. The previous
+    // needle `"PASSWORD "` matched `password authentication failed for user …`
+    // — the single most common PostgreSQL error — and replaced the whole reason
+    // with `[redacted]` (#609).
+    let lower = raw.to_ascii_lowercase();
+    let mut cut = None;
+    for needle in ["password=", "pwd=", "private_key", "begin rsa", "begin openssh"] {
+        if let Some(idx) = lower.find(needle) {
+            cut = Some(idx);
             break;
         }
     }
-    out
+    if cut.is_none() {
+        // `password = value`, with spaces around the operator.
+        if let Some(idx) = lower.find("password") {
+            let after = lower[idx + "password".len()..].trim_start();
+            if after.starts_with('=') {
+                cut = Some(idx);
+            }
+        }
+    }
+    if cut.is_none() {
+        // SQL literal form: `CREATE ROLE app PASSWORD 'x'`.
+        cut = sql_password_literal_start(&lower);
+    }
+    match cut {
+        Some(idx) => format!("{}[redacted]", &raw[..idx]),
+        None => raw.to_owned(),
+    }
+}
+
+/// Byte offset of a `PASSWORD` keyword followed by a `'…'` literal, if any.
+fn sql_password_literal_start(lower: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("password") {
+        let idx = from + rel;
+        let after = lower[idx + "password".len()..].trim_start();
+        if after.starts_with('\'') {
+            return Some(idx);
+        }
+        from = idx + "password".len();
+    }
+    None
 }
 
 /// Run pre-auth network stages locally. Auth is reported from the caller after test_connection.

@@ -21,12 +21,11 @@ pub(crate) fn install(ctx: &Context) {
     ctx.on_end_pass(
         "db-pro-text-selection-style",
         Arc::new(|ctx| {
-            if ctx.memory(|memory| memory.focused().is_none())
-                && !ctx
-                    .plugin::<egui::text_selection::LabelSelectionState>()
-                    .lock()
-                    .has_selection()
-            {
+            // #585: a focused widget is *not* a selection. The old guard only
+            // bailed out when nothing was focused, so typing in the SQL editor
+            // walked every layer / every shape / every text row of the frame
+            // just to find no selection quad. Require real selected text.
+            if !has_selected_text(ctx) {
                 return;
             }
             let selection = ctx.global_style().visuals.selection;
@@ -44,6 +43,31 @@ pub(crate) fn install(ctx: &Context) {
             });
         }),
     );
+}
+
+/// True when any text widget actually shows selected text (#585).
+///
+/// Covers native label selection plus a focused `TextEdit` whose primary cursor
+/// differs from its selection anchor. A caret-only editor selects nothing, so
+/// the whole shape walk is skipped.
+fn has_selected_text(ctx: &Context) -> bool {
+    if ctx
+        .plugin::<egui::text_selection::LabelSelectionState>()
+        .lock()
+        .has_selection()
+    {
+        return true;
+    }
+    let Some(focused) = ctx.memory(|memory| memory.focused()) else {
+        return false;
+    };
+    let Some(state) = egui::text_edit::TextEditState::load(ctx, focused) else {
+        return false;
+    };
+    let Some(cursor) = state.cursor.char_range() else {
+        return false;
+    };
+    cursor.primary != cursor.secondary
 }
 
 fn style_shape(shape: &mut Shape, background: Color32, foreground: Color32) {

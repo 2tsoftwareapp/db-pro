@@ -81,6 +81,8 @@ impl DbProApp {
             GridHeaderAction::ShowColumns => self.table.data.show_all_columns(),
             GridHeaderAction::ResetLayout => self.table.data.reset_grid_layout(result.columns.len()),
             GridHeaderAction::AutoSize(column_index) => {
+                // #582: the grid is shared via `Rc`, so a header action that
+                // mutates column state must be applied to the owned copy.
                 self.table.data.auto_size_column(result, indexes, column_index);
             }
             GridHeaderAction::MoveLeft(_) | GridHeaderAction::MoveRight(_) => {}

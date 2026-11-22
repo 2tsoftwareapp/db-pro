@@ -1,3 +1,4 @@
+mod fonts;
 pub(crate) mod text_selection_style;
 pub mod tokens;
 
@@ -30,6 +31,27 @@ const INTER_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular.tt
 const INTER_REGULAR_EXT: &[u8] = include_bytes!("../../assets/fonts/Inter-Regular-ext.ttf");
 const INTER_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
 const INTER_MEDIUM_EXT: &[u8] = include_bytes!("../../assets/fonts/Inter-Medium-ext.ttf");
+
+/// Register a discovered system face under `role` and append it to each family.
+///
+/// Fallback families are ordered by preference, so faces are always *appended*:
+/// the bundled Inter faces stay first for Latin text and the system face only
+/// contributes the glyphs Inter cannot draw (#567).
+fn install_face(fonts: &mut egui::FontDefinitions, face: &fonts::FontFace, role: &str, families: &[FontFamily]) {
+    let key = face.key(role);
+    if fonts.font_data.contains_key(&key) {
+        return;
+    }
+    fonts
+        .font_data
+        .insert(key.clone(), std::sync::Arc::new(egui::FontData::from_owned(face.bytes.clone())));
+    for family in families {
+        let stack = fonts.families.entry(family.clone()).or_default();
+        if !stack.contains(&key) {
+            stack.push(key.clone());
+        }
+    }
+}
 
 /// Product-owned visual tokens for the native shell.
 ///
@@ -316,113 +338,57 @@ impl DbProTheme {
         medium.insert(0, "inter_medium_ext".to_owned());
         medium.insert(0, "inter_medium".to_owned());
 
-        let system_font_paths = [
-            "/System/Library/Fonts/SFNS.ttf",
-            "/System/Library/Fonts/SFCompact.ttf",
-            "C:\\Windows\\Fonts\\segoeui.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-            "/Library/Fonts/Arial.ttf",
-            "C:\\Windows\\Fonts\\arial.ttf",
-        ];
-        let mut loaded_system_ui = false;
-        for path in system_font_paths {
-            // cc-scan:allow DUPLICATE_BLOCK — coincidental boilerplate, not a real clone
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert(
-                    "system_ui".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                fonts
-                    .families
-                    .entry(FontFamily::Proportional)
-                    .or_default()
-                    .push("system_ui".to_owned());
-                fonts
-                    .families
-                    .entry(FontFamily::Name("ui_medium".into()))
-                    .or_default()
-                    .push("system_ui".to_owned());
-                loaded_system_ui = true;
-                break;
-            }
-        }
-        let mono_system_paths = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
-            "/System/Library/Fonts/Menlo.ttc",
-            "/System/Library/Fonts/Monaco.ttf",
-            "C:\\Windows\\Fonts\\cascadiacode.ttf",
-            "C:\\Windows\\Fonts\\consola.ttf",
-        ];
-        for path in mono_system_paths {
-            if let Ok(bytes) = std::fs::read(path) {
-                fonts.font_data.insert(
-                    "system_mono".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                fonts
-                    .families
-                    .entry(FontFamily::Monospace)
-                    .or_default()
-                    .push("system_mono".to_owned());
-                break;
-            }
+        // #567: the bundled Inter files are subsets — they miss the whole
+        // Vietnamese `Latin Extended Additional` block (U+1EA0–U+1EF9). A system
+        // face is therefore only accepted when it provably draws `ạ ệ ỡ ơ ư`,
+        // and the candidate list covers Fedora, Arch, Alpine, NixOS, Flatpak and
+        // the three desktop platforms instead of a handful of Debian paths.
+        let sans = fonts::first_covering(fonts::SANS_CANDIDATES, fonts::VIETNAMESE_PROBE);
+        if let Some(face) = &sans {
+            install_face(&mut fonts, face, "ui", &[FontFamily::Proportional]);
         }
 
-        // CJK / Japanese / Asian font fallback
-        let cjk_font_paths = [
-            "/System/Library/Fonts/AppleSDGothicNeo.ttc", // Korean + partial CJK
-            "/System/Library/Fonts/Hiragino Sans GB.ttc", // Japanese + zh-hans
-            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-            "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
-            "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
-            "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
-            "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            "/System/Library/Fonts/PingFang.ttc",
-            "/Library/Fonts/Arial Unicode.ttf",
-            "C:\\Windows\\Fonts\\msgothic.ttc",
-            "C:\\Windows\\Fonts\\meiryo.ttc",
-            "C:\\Windows\\Fonts\\msyh.ttc",
-            "C:\\Windows\\Fonts\\malgun.ttf",
-            "C:\\Windows\\Fonts\\yugothr.ttc",
-        ];
-        // No early exit: each face covers a different CJK subset, so all found
-        // faces must enter the family for glyph-level fallback to work.
-        for (index, path) in cjk_font_paths.iter().enumerate() {
-            if let Ok(bytes) = std::fs::read(path) {
-                let name = format!("cjk_fallback_{index}");
-                fonts
-                    .font_data
-                    .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-                fonts
-                    .families
-                    .entry(FontFamily::Proportional)
-                    .or_default()
-                    .push(name.clone());
-                fonts
-                    .families
-                    .entry(FontFamily::Name("ui_medium".into()))
-                    .or_default()
-                    .push(name.clone());
-                fonts.families.entry(FontFamily::Monospace).or_default().push(name);
-            }
+        // Monospace keeps its own metrics even when the face misses a few
+        // Vietnamese probes (DejaVu Sans Mono does); the missing glyph is then
+        // drawn by the UI fallback below rather than replacing the mono face.
+        let mono = fonts::first_covering(fonts::MONO_CANDIDATES, fonts::VIETNAMESE_PROBE)
+            .or_else(|| fonts::first_existing(fonts::MONO_CANDIDATES));
+        if let Some(face) = &mono {
+            install_face(&mut fonts, face, "mono", &[FontFamily::Monospace]);
         }
 
-        // Fallback for monospace: inter_ext, inter, and system_ui so full Unicode / Vietnamese diacritics / CJK render
+        // #584: one face per CJK script (Han, kana, hangul), never every face
+        // found. A single Noto CJK / PingFang / MS Gothic file satisfies all
+        // three, so the loader reads ~one file instead of five to eight.
+        for face in fonts::load_cjk_faces(fonts::CJK_CANDIDATES) {
+            install_face(
+                &mut fonts,
+                &face,
+                "cjk",
+                &[
+                    FontFamily::Proportional,
+                    FontFamily::Name("ui_medium".into()),
+                    FontFamily::Monospace,
+                ],
+            );
+        }
+
+        // Monospace falls back to the UI faces last so a character missing from
+        // the mono face still renders instead of showing tofu.
         let monospace = fonts.families.entry(FontFamily::Monospace).or_default();
         monospace.push("inter_ext".to_owned());
         monospace.push("inter".to_owned());
-        if loaded_system_ui {
-            monospace.push("system_ui".to_owned());
+        if let Some(face) = &sans {
+            let key = face.key("ui");
+            if !monospace.contains(&key) {
+                monospace.push(key);
+            }
         }
 
         ctx.set_fonts(fonts);
     }
+
+
 
     pub fn apply(self, ctx: &egui::Context) {
         text_selection_style::install(ctx);

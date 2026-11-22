@@ -27,6 +27,9 @@ pub(crate) struct ConnectionDialogState {
     /// Collapsed state of the optional panels; `Collapsible` owns the toggle.
     pub(super) cloud_presets_open: bool,
     pub(super) tags_panel_open: bool,
+    /// Bumped on every open so the form body scroll area gets a fresh Id and
+    /// reopens scrolled to the top (#609).
+    pub(super) open_generation: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +76,10 @@ impl ConnectionDialogState {
 
     pub(crate) fn set_editing_connection_id(&mut self, connection_id: Option<String>) {
         self.editing_connection_id = connection_id;
+    }
+
+    pub(crate) fn editing_connection_id(&self) -> Option<&str> {
+        self.editing_connection_id.as_deref()
     }
 
     pub(crate) fn set_error(&mut self, error: impl Into<String>) {
@@ -124,6 +131,13 @@ impl ConnectionDialogState {
         self.diagnostics.as_ref()
     }
 
+    pub(crate) fn set_diagnostics(
+        &mut self,
+        report: Option<db_pro_core::domain::connection_diagnostics::ConnectionDiagnosticsReport>,
+    ) {
+        self.diagnostics = report;
+    }
+
     pub(crate) fn ssh_profiles(&self) -> &[db_pro_core::domain::connection::SshProfile] {
         &self.ssh_profiles
     }
@@ -150,6 +164,7 @@ impl ConnectionDialogState {
                 self.show_password = false;
                 self.focus_name_on_open = true;
                 self.discard_draft_confirmation = false;
+                self.open_generation += 1;
                 self.open = true;
                 self.invalidate_test();
             }
@@ -159,6 +174,7 @@ impl ConnectionDialogState {
                 self.draft = draft;
                 self.focus_name_on_open = true;
                 self.discard_draft_confirmation = false;
+                self.open_generation += 1;
                 self.open = true;
                 self.invalidate_test();
             }
@@ -168,6 +184,7 @@ impl ConnectionDialogState {
                 self.draft = draft;
                 self.focus_name_on_open = true;
                 self.discard_draft_confirmation = false;
+                self.open_generation += 1;
                 self.open = true;
                 self.invalidate_test();
             }
@@ -191,6 +208,9 @@ impl ConnectionDialogState {
     fn invalidate_test(&mut self) {
         self.test_valid = false;
         self.test_draft = None;
+        // Diagnostics describe one tested draft; any new draft or close makes
+        // them stale — never show them against untested input (#609).
+        self.diagnostics = None;
         self.clear_error();
     }
 }

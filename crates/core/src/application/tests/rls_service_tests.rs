@@ -27,7 +27,8 @@ async fn rls_rejects_sqlite_before_provider_call() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let mut connections = MockConnectionRepository::new();
     connections
         .expect_get_config()

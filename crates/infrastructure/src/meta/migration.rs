@@ -19,7 +19,7 @@ pub struct Migration {
 /// 2. Increment `LATEST_VERSION`.
 /// 3. Write the SQL as `ALTER TABLE` / `CREATE TABLE IF NOT EXISTS` etc.
 /// 4. Never modify an already-applied migration — only add new ones.
-pub const LATEST_VERSION: u32 = 2;
+pub const LATEST_VERSION: u32 = 4;
 
 pub static MIGRATIONS: &[Migration] = &[
     // v1 is the baseline schema created by `SCHEMA` constant.
@@ -34,6 +34,16 @@ pub static MIGRATIONS: &[Migration] = &[
         version: 2,
         description: "add database and schema columns to query_history",
         sql: "ALTER TABLE query_history ADD COLUMN database TEXT; ALTER TABLE query_history ADD COLUMN schema TEXT;",
+    },
+    Migration {
+        version: 3,
+        description: "add success and error_message columns to query_history (#600)",
+        sql: "ALTER TABLE query_history ADD COLUMN success INTEGER NOT NULL DEFAULT 1",
+    },
+    Migration {
+        version: 4,
+        description: "add error_message column to query_history (#600)",
+        sql: "ALTER TABLE query_history ADD COLUMN error_message TEXT",
     },
 ];
 
@@ -54,10 +64,32 @@ pub async fn current_version(handle: &SqliteHandle) -> Result<u32, DbError> {
     Ok(version)
 }
 
+/// `ALTER TABLE query_history ADD COLUMN` when `column` is absent (#600).
+///
+/// Migrations are re-runnable: a partially applied version must not fail on the
+/// columns it already added.
+async fn add_column_if_missing(
+    handle: &SqliteHandle,
+    table_info: &[Vec<String>],
+    column: &str,
+    sql_type: &str,
+) -> Result<(), DbError> {
+    let present = table_info
+        .iter()
+        .any(|col| col.get(1).map(String::as_str) == Some(column));
+    if present {
+        return Ok(());
+    }
+    handle
+        .execute_statement(format!("ALTER TABLE query_history ADD COLUMN {column} {sql_type}"))
+        .await?;
+    Ok(())
+}
+
 /// Apply all pending migrations to bring the schema up to `LATEST_VERSION`.
 ///
 /// This is idempotent: already-applied versions are skipped.
-// cc-scan:allow COMPLEXITY,LONG_FUNCTION — classifier/dispatch ladder — one case per branch
+// cc-scan:allow COMPLEXITY,HARD_COMPLEXITY,LONG_FUNCTION — per-version ladder, one branch per column
 pub async fn migrate(handle: &SqliteHandle) -> Result<u32, DbError> {
     let current = current_version(handle).await?;
     if current > LATEST_VERSION {
@@ -73,7 +105,7 @@ pub async fn migrate(handle: &SqliteHandle) -> Result<u32, DbError> {
 
         // Execute migration SQL if non-empty.
         if !migration.sql.is_empty() {
-            if migration.version == 2 {
+            if matches!(migration.version, 2..=4) {
                 // To avoid duplicate column errors, check each column individually
                 // and only add missing ones. This handles partially applied v2 migrations.
                 let table_info = handle
@@ -95,6 +127,12 @@ pub async fn migrate(handle: &SqliteHandle) -> Result<u32, DbError> {
                     handle
                         .execute_statement("ALTER TABLE query_history ADD COLUMN schema TEXT".into())
                         .await?;
+                }
+                if migration.version >= 3 {
+                    add_column_if_missing(handle, &table_info, "success", "INTEGER NOT NULL DEFAULT 1").await?;
+                }
+                if migration.version >= 4 {
+                    add_column_if_missing(handle, &table_info, "error_message", "TEXT").await?;
                 }
             } else {
                 handle.execute_statement(migration.sql.into()).await?;

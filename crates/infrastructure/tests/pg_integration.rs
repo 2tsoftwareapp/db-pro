@@ -74,7 +74,8 @@ fn pg_config() -> Option<ConnectionConfig> {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    })
+        create_if_missing: false,
+})
 }
 
 /// The password half of `DATABASE_URL`, for the connect calls that `pg_config()` does not carry.
@@ -2309,4 +2310,32 @@ async fn dbpro252_typed_routine_execution_binds_parameters_and_surfaces_plpgsql_
         .await
         .expect("drop dbpro252_raise");
     connector.disconnect(&handle).await.unwrap();
+}
+
+/// #604: the client-side guardrail must sit at the product ceiling so the UI
+/// row-limit selector (injected `LIMIT`) decides how many rows come back —
+/// previously a hard-coded 500 truncated 1,000/100,000-row reads silently.
+#[tokio::test]
+#[ignore = "requires the disposable PostgreSQL integration fixture"]
+async fn pg_query_row_cap_ceiling_allows_beyond_500_rows() {
+    let Some(mut config) = pg_config() else {
+        return;
+    };
+    config.max_rows = db_pro_core::domain::connection::PRODUCT_MAX_ROWS;
+    let connector = PostgresConnector::new();
+    let handle = connector
+        .connect(&config, &pg_password())
+        .await
+        .expect("PG connect failed");
+    for limit in [1_000u64, 100_000u64] {
+        let result = connector
+            .query(&handle, &format!("SELECT generate_series(1, {limit}) AS n"), &[])
+            .await
+            .expect("query must succeed");
+        assert_eq!(
+            result.rows.len() as u64,
+            limit,
+            "LIMIT {limit} must not be truncated by the connector guardrail"
+        );
+    }
 }

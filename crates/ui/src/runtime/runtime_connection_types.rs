@@ -35,6 +35,9 @@ pub struct UiConnectionDraft {
     pub driver: UiDriver,
     pub ssl_mode: UiSslMode,
     pub readonly: bool,
+    /// SQLite only: create the database file if it is missing. Defaults to off so
+    /// a mistyped path fails instead of producing an empty database (#597).
+    pub create_if_missing: bool,
     pub group: String,
     pub tags: String,
     pub favorite: bool,
@@ -72,6 +75,7 @@ impl Default for UiConnectionDraft {
             // Require/Verify explicitly for hosts that need it.
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             // cc-scan:allow DUPLICATE_BLOCK — coincidental boilerplate, not a real clone
             group: String::new(),
             tags: String::new(),

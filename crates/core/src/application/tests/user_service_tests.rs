@@ -27,7 +27,8 @@ async fn user_management_rejects_sqlite_before_provider_call() {
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     assert!(config.validate().is_ok());
 
     let mut connections = MockConnectionRepository::new();

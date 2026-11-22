@@ -500,6 +500,7 @@ impl DbProApp {
         }
         self.apply_security_operation_completion(&operation);
         self.apply_connection_operation_completion(&operation);
+        self.apply_connection_session_completion(&operation);
         self.apply_connection_test_completion(&operation, pending_connection_request);
         if operation.starts_with("table-row.") || operation == "table-changes.applied" {
             self.on_table_row_operation_completed(request_id);
@@ -537,6 +538,28 @@ impl DbProApp {
         }
     }
 
+    /// The runtime tears the live session down on every connection update.
+    /// Keep the sidebar honest (no stale "connected") and silently reopen the
+    /// session if the user was working on it, so open tabs keep working (#603).
+    fn apply_connection_session_completion(&mut self, operation: &str) {
+        if operation != "connection.updated" {
+            return;
+        }
+        // `close_connection_dialog` runs right after this — read the editing id first.
+        let Some(connection_id) = self.connection.dialog.editing_connection_id().map(str::to_owned) else {
+            return;
+        };
+        self.connection.lifecycle.note_session_closed(&connection_id);
+        let was_active = self.connection.lifecycle.active_connection_id() == Some(connection_id.as_str());
+        if !was_active {
+            return;
+        }
+        self.connection.lifecycle.set_connected(false);
+        if let Some(summary) = self.connection.catalog.find(&connection_id).cloned() {
+            self.connect_to_connection(&summary);
+        }
+    }
+
     fn apply_connection_operation_completion(&mut self, operation: &str) {
         if matches!(operation, "connection.created" | "connection.updated" | "connection.deleted") {
             self.connection.lifecycle.clear_connections_requested();
@@ -549,8 +572,8 @@ impl DbProApp {
             return;
         }
         self.connection.dialog.clear_error();
-        self.refresh_connection_diagnostics(true, "Authentication succeeded");
         if self.connection.dialog.test_draft() == Some(self.connection.dialog.draft()) {
+            self.refresh_connection_diagnostics(true, "Authentication succeeded");
             self.connection.dialog.set_test_valid(true);
             self.feedback.set_runtime_message(
                 self.connection
@@ -560,7 +583,11 @@ impl DbProApp {
                     .unwrap_or_else(|| "Connection test succeeded".to_owned()),
             );
         } else {
+            // The draft moved on since the test was dispatched: the report
+            // describes a different draft — drop it instead of showing stale
+            // OK lines (#609).
             self.connection.dialog.set_test_valid(false);
+            self.connection.dialog.clear_test();
             self.feedback
                 .set_runtime_message("Connection changed · test again before saving");
         }
@@ -578,6 +605,7 @@ impl DbProApp {
         let deleted_id = self.connection.lifecycle.take_pending_connection_id();
         if let Some(ref id) = deleted_id {
             self.connection.lifecycle.clear_connection_error(id);
+            self.connection.lifecycle.note_session_closed(id);
         }
         let deleted_was_active = deleted_id
             .as_ref()
@@ -600,7 +628,7 @@ impl DbProApp {
             self.staged_apply_completed();
         } else if self.table.mutation.table_mutation_request == Some(request_id) {
             self.table.mutation.table_mutation_request = None;
-            self.table.data_query.result = None;
+            self.table.data_query.clear_result();
             self.table.data_query.total_rows = None;
             self.table.data_query.error = None;
             self.table.data_query.request = None;

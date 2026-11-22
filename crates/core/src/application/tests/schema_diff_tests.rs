@@ -151,6 +151,7 @@ fn live_schema_compare_includes_indexes_foreign_keys_and_view_bodies() {
         name: "open_orders".into(),
         schema: "public".into(),
         definition: "SELECT id FROM orders WHERE open".into(),
+        kind: Default::default(),
     });
 
     let mut target = IntrospectResult::empty();
@@ -168,6 +169,7 @@ fn live_schema_compare_includes_indexes_foreign_keys_and_view_bodies() {
         name: "open_orders".into(),
         schema: "public".into(),
         definition: "SELECT id, created_at FROM orders WHERE open".into(),
+        kind: Default::default(),
     });
 
     let diff = compare_schemas(&source, &target);

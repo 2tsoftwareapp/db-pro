@@ -22,6 +22,7 @@
             driver: "PostgreSQL".to_owned(),
             ssl_mode: UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec![],
             group: None,
             favorite: false,

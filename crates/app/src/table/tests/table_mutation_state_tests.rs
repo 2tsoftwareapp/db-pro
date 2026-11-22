@@ -17,6 +17,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let mut state = TableMutationState {
             table_mutation_error: Some(MutationFailure {
@@ -44,6 +45,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["id".to_owned()],
             original_pk_values: vec![UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
         let mut state = TableMutationState::default();
         state.staged_changes.stage_update(StagedChange::Update {
@@ -59,6 +61,7 @@
             identity: RowIdentity {
                 original_pk_columns: vec!["id".to_owned()],
                 original_pk_values: vec![UiCell::Number("8".to_owned())],
+                original_pk_data_types: Vec::new(),
             },
             current_row_index: Some(3),
         });
@@ -102,6 +105,7 @@
         let identity = RowIdentity {
             original_pk_columns: vec!["tenant_id".to_owned(), "id".to_owned()],
             original_pk_values: vec![UiCell::Text("tenant-a".to_owned()), UiCell::Number("7".to_owned())],
+            original_pk_data_types: Vec::new(),
         };
 
         let filters = TableMutationState::row_reload_filters(&info, &identity).expect("filters");
@@ -112,3 +116,27 @@
         assert_eq!(filters[1].column, "id");
         assert_eq!(filters[1].value, "7");
     }
+/// #610: the inline-edit banner used to print "INTERNAL · Mutation #1 failed",
+/// which threw away the only actionable text the server sent.
+#[test]
+fn failure_banner_keeps_the_runtime_message_610() {
+    assert_eq!(
+        failure_message("QUERY_FAILED", "operator does not exist: text = uuid"),
+        "operator does not exist: text = uuid",
+        "the real SQL error must survive verbatim"
+    );
+    assert_eq!(
+        failure_message("VALIDATION_ERROR", "row changed by another transaction"),
+        "row changed by another transaction"
+    );
+    let conflict = failure_message("CONFLICT", "0 rows updated");
+    assert!(
+        conflict.starts_with("This row changed or was deleted in the database."),
+        "conflicts still explain themselves: {conflict}"
+    );
+    assert!(conflict.contains("0 rows updated"), "{conflict}");
+    // Only the generic wrapper is shortened for the badge; SQL codes pass through.
+    assert_eq!(normalize_failure_code("INTERNAL_ERROR"), "INTERNAL");
+    assert_eq!(normalize_failure_code("QUERY_FAILED"), "QUERY_FAILED");
+    assert_eq!(normalize_failure_code("CONSTRAINT_VIOLATION"), "CONSTRAINT_VIOLATION");
+}

@@ -52,7 +52,7 @@ impl DbProApp {
     fn draw_table_workspace_content(&mut self, ui: &mut egui::Ui, table_name: &str) {
         match self.table.state.table_view {
             TableView::Data => self.draw_table_data(ui, table_name),
-            TableView::Profile => self.draw_column_profile_pane(ui, self.table.data_query.result.as_ref()),
+            TableView::Profile => self.draw_column_profile_pane(ui, self.table.data_query.result_ref()),
             view => self.draw_table_metadata_view(ui, table_name, view),
         }
     }

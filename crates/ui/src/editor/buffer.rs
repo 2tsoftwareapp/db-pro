@@ -158,6 +158,10 @@ pub struct TextBuffer {
     line_starts: Vec<usize>,
     /// Longest line in Unicode scalars — refreshed with the line index (not per frame).
     max_line_chars: usize,
+    /// Per-line char counts, parallel to `line_starts` (#580). Kept so an
+    /// edit can update `max_line_chars` from the touched lines instead of
+    /// re-decoding the whole buffer.
+    line_char_lens: Vec<usize>,
     pub undo_stack: UndoStack,
     version: u64,
     /// `(start, old_end, new_end)` of the latest edit, in bytes.
@@ -172,6 +176,7 @@ impl TextBuffer {
             content: String::new(),
             line_starts: vec![0],
             max_line_chars: 0,
+            line_char_lens: vec![0],
             undo_stack: UndoStack::new(),
             version: 0,
             last_edit: None,
@@ -185,6 +190,7 @@ impl TextBuffer {
             content: text.into(),
             line_starts: vec![0],
             max_line_chars: 0,
+            line_char_lens: vec![0],
             undo_stack: UndoStack::new(),
             version: 0,
             last_edit: None,
@@ -223,6 +229,12 @@ impl TextBuffer {
 
     pub fn max_line_len_chars(&self) -> usize {
         self.max_line_chars
+    }
+
+    /// Byte offsets of line starts — exposed for the #580 differential tests.
+    #[cfg(test)]
+    pub(crate) fn line_starts_for_test(&self) -> Vec<usize> {
+        self.line_starts.clone()
     }
 
     // --- UTF-8 Safety Helpers ---
@@ -436,7 +448,7 @@ impl TextBuffer {
         self.content.insert_str(clamped, text);
         self.version = self.version.wrapping_add(1);
         self.last_edit = bounded_edit(clamped, clamped, clamped + text.len(), 0, newline_count(text));
-        self.rebuild_line_index();
+        self.refresh_after_edit();
     }
 
     // cc-scan:allow TOO_MANY_PARAMS — context params passed through
@@ -449,7 +461,7 @@ impl TextBuffer {
         self.content.insert_str(clamped, text);
         self.version = self.version.wrapping_add(1);
         self.last_edit = bounded_edit(clamped, clamped, clamped + text.len(), 0, newline_count(text));
-        self.rebuild_line_index();
+        self.refresh_after_edit();
     }
 
     pub fn delete(&mut self, start: usize, end: usize) -> String {
@@ -494,7 +506,7 @@ impl TextBuffer {
         self.content.replace_range(clamped_start..clamped_end, "");
         self.version = self.version.wrapping_add(1);
         self.last_edit = bounded_edit(clamped_start, clamped_end, clamped_start, newline_count(&deleted), 0);
-        self.rebuild_line_index();
+        self.refresh_after_edit();
         deleted
     }
 
@@ -566,7 +578,16 @@ impl TextBuffer {
             removed_newlines,
             newline_count(text),
         );
-        self.rebuild_line_index();
+        self.refresh_after_edit();
+    }
+
+    /// Keep the line index in sync after an edit: incremental when the edit
+    /// stayed inside two lines, full rebuild otherwise (#580).
+    fn refresh_after_edit(&mut self) {
+        match self.last_edit {
+            Some((start, old_end, new_end)) => self.update_line_index(start, old_end, new_end),
+            None => self.rebuild_line_index(),
+        }
     }
 
     pub fn set_text(&mut self, text: impl Into<String>) {
@@ -647,18 +668,97 @@ impl TextBuffer {
         }
     }
 
+    /// Rebuild the whole line index (#580).
+    ///
+    /// Only used on construction, `set_text_initial`, undo/redo and edits that
+    /// span more than two lines; ordinary typing goes through
+    /// [`Self::update_line_index`] and touches only the edited lines.
     fn rebuild_line_index(&mut self) {
         self.line_starts.clear();
         self.line_starts.push(0);
         for (idx, b) in self.content.as_bytes().iter().enumerate() {
-            if *b == b'\n' && idx < self.content.len() {
+            if *b == b'\n' {
                 self.line_starts.push(idx + 1);
             }
         }
-        self.max_line_chars = (0..self.line_count())
-            .map(|l| self.line_at(l).unwrap_or("").chars().count())
-            .max()
-            .unwrap_or(0);
+        self.line_char_lens = (0..self.line_count())
+            .map(|line| self.line_at(line).unwrap_or("").chars().count())
+            .collect();
+        self.max_line_chars = self.line_char_lens.iter().copied().max().unwrap_or(0);
+    }
+
+    /// Incrementally update the line index after a bounded edit (#580).
+    ///
+    /// `start`, `old_end` and `new_end` are the same triple stored in
+    /// [`Self::last_edit`]: `old_end` is an offset into the *pre-edit* content,
+    /// `new_end` into the current one. Because such an edit spans at most two
+    /// lines, only the touched lines are re-measured — no whole-buffer UTF-8
+    /// decode per keystroke.
+    pub(crate) fn update_line_index(&mut self, start: usize, old_end: usize, new_end: usize) {
+        let Some(first) = self.line_index_at(start) else {
+            return self.rebuild_line_index();
+        };
+        if new_end > self.content.len() {
+            return self.rebuild_line_index();
+        }
+        self.splice_line_starts(first, old_end, new_end);
+        self.recount_touched_lines(first, new_end);
+    }
+
+    /// Replace the line starts covered by the edit and shift the rest (#580).
+    fn splice_line_starts(&mut self, first: usize, old_end: usize, new_end: usize) {
+        let first_start = self.line_starts[first];
+        if first_start > old_end.min(new_end) {
+            return self.rebuild_line_index();
+        }
+        // New line starts introduced anywhere in the touched window.
+        let mut fresh: Vec<usize> = Vec::new();
+        for (offset, byte) in self.content.as_bytes()[first_start..new_end].iter().enumerate() {
+            if *byte == b'\n' {
+                fresh.push(first_start + offset + 1);
+            }
+        }
+        // Old line starts the edit consumed: entries in `(first_start, old_end]`.
+        let removed = self.line_starts[first + 1..]
+            .iter()
+            .take_while(|offset| **offset <= old_end)
+            .count();
+        let inserted = fresh.len();
+        self.line_starts
+            .splice(first + 1..first + 1 + removed, fresh.iter().copied());
+        // Everything past the replaced window moves by the byte delta.
+        let delta = new_end as isize - old_end as isize;
+        let limit = self.content.len();
+        for offset in &mut self.line_starts[first + 1 + inserted..] {
+            let shifted = *offset as isize + delta;
+            *offset = shifted.clamp(0, limit as isize) as usize;
+        }
+    }
+
+    /// Re-measure only the lines the edit could have changed (#580).
+    fn recount_touched_lines(&mut self, first: usize, new_end: usize) {
+        let Some(last) = self.line_index_at(new_end) else {
+            return self.rebuild_line_index();
+        };
+        let tail = (last + 1).min(self.line_starts.len());
+        self.line_char_lens.resize(self.line_starts.len(), 0);
+        for line in first..tail {
+            let len = self.line_at(line).unwrap_or("").chars().count();
+            self.line_char_lens[line] = len;
+        }
+        // Integer-only running max over the per-line cache; no re-decode.
+        self.max_line_chars = self.line_char_lens.iter().copied().max().unwrap_or(0);
+    }
+
+    /// Binary-search the line containing `offset`.
+    fn line_index_at(&self, offset: usize) -> Option<usize> {
+        if self.line_starts.is_empty() {
+            return None;
+        }
+        Some(match self.line_starts.binary_search(&offset) {
+            Ok(idx) => idx,
+            Err(idx) => idx.saturating_sub(1),
+        })
     }
 }
 

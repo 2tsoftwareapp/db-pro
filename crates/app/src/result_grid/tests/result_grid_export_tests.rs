@@ -188,3 +188,50 @@
         assert!(copy.starts_with("COPY \"people\" (\"id\", \"path\", \"ok\") FROM stdin;"), "{copy}");
         assert!(copy.ends_with("\\.\n"), "{copy}");
     }
+
+    // #590: `NaN`/`Infinity` parse as `f64` but are not bare SQL literals.
+    #[test]
+    fn copy_as_sql_quotes_non_finite_numbers_590() {
+        for value in ["NaN", "inf", "-inf", "Infinity", "-Infinity"] {
+            assert_eq!(
+                cell_sql_literal(&UiCell::Number(value.to_owned())),
+                format!("'{value}'"),
+                "{value} must be quoted"
+            );
+        }
+        for value in ["0", "-1.5", "1e9", "1000000000000000000"] {
+            assert_eq!(
+                cell_sql_literal(&UiCell::Number(value.to_owned())),
+                value,
+                "{value} stays a numeric literal"
+            );
+        }
+    }
+
+    // #593: the clipboard path is raw — phone numbers, indented strings, bare
+    // `-` and `@user` must not gain a `'`, while file exports stay Excel-safe.
+    #[test]
+    fn clipboard_csv_is_raw_while_file_export_stays_excel_safe_593() {
+        for value in ["+84 912 345 678", " leading space", "-", "@user", "-abc"] {
+            assert_eq!(
+                format_cell_csv(&UiCell::Text(value.to_owned())),
+                value,
+                "{value:?} must round-trip through the clipboard"
+            );
+            assert_eq!(
+                escape_delimited_field_with(value, ',', db_pro_core::application::DelimitedSafety::Raw),
+                value,
+                "{value:?}"
+            );
+        }
+        assert_eq!(
+            format_cell_csv(&UiCell::Text("=HYPERLINK(\"http://evil\")".to_owned())),
+            "=HYPERLINK(\"http://evil\")"
+        );
+        // File exports still neutralise real formulas.
+        assert_eq!(
+            escape_delimited_field("=1+1", ','),
+            "'=1+1",
+            "Excel-safe default is unchanged"
+        );
+    }

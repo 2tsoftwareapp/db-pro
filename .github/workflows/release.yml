@@ -111,6 +111,20 @@ jobs:
           echo "source_kind=${source_kind}" >> "${GITHUB_OUTPUT}"
           echo "Resolved ${source_ref} -> ${candidate_sha}"
 
+      - name: Release version regressions
+        run: python3 -m unittest discover -s scripts/release/tests -v
+
+      - name: Preserve workflow version resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Validate historical candidates with the workflow's resolver, even
+          # when that candidate predates this script. RUNNER_TEMP survives the
+          # candidate checkout; the workspace does not.
+          resolver_dir="$(mktemp -d "${RUNNER_TEMP}/db-pro-release-version.XXXXXX")"
+          cp scripts/release/resolve-version.py "${resolver_dir}/resolve-version.py"
+          echo "RELEASE_VERSION_RESOLVER=${resolver_dir}/resolve-version.py" >> "${GITHUB_ENV}"
+
       - name: Checkout exact candidate SHA
         uses: actions/checkout@v4
         with:
@@ -133,19 +147,14 @@ jobs:
             exit 1
           fi
 
-          app_version="$(python3 -c 'import re,pathlib; text=pathlib.Path("crates/native-app/Cargo.toml").read_text(); match=re.search(r"^version\s*=\s*\"([^\"]+)\"", text, re.M); print(match.group(1) if match else "")')"
-          if [[ -z "${app_version}" ]]; then
-            echo "::error::Unable to resolve app version from crates/native-app/Cargo.toml"
-            exit 1
-          fi
-
+          # Ubuntu runners provide Python >= 3.11 (tomllib). Keep RC suffixes
+          # in source_ref, not app_version: package/checksum names use the source
+          # version, while provenance identifies the exact candidate tag.
+          version_args=(crates/native-app/Cargo.toml)
           if [[ "${SOURCE_KIND}" == "tag" ]]; then
-            tag_name="${SOURCE_REF#refs/tags/}"
-            if [[ "${tag_name}" == v* && "${tag_name#v}" != "${app_version}" ]]; then
-              echo "::error::Release tag ${tag_name} does not match source app version ${app_version}"
-              exit 1
-            fi
+            version_args+=(--tag "${SOURCE_REF}")
           fi
+          app_version="$(python3 "${RELEASE_VERSION_RESOLVER}" "${version_args[@]}")"
 
           short_sha="${actual_sha:0:12}"
           echo "candidate_sha=${actual_sha}" >> "${GITHUB_OUTPUT}"

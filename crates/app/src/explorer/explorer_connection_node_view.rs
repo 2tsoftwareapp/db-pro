@@ -14,6 +14,7 @@ pub(super) enum ExplorerConnectionNodeAction {
 
 pub(super) struct ExplorerConnectionNodeModel {
     pub(super) is_connected: bool,
+    pub(super) is_active: bool,
     pub(super) is_connecting: bool,
     pub(super) is_failed: bool,
     pub(super) error: Option<String>,
@@ -50,6 +51,7 @@ impl<'a> ExplorerConnectionNodeView<'a> {
             theme: self.theme,
             connection: self.connection,
             is_connected: self.model.is_connected,
+            is_active: self.model.is_active,
             is_connecting: self.model.is_connecting,
             is_failed: self.model.is_failed,
             modifier: self.modifier,
@@ -70,6 +72,11 @@ impl<'a> ExplorerConnectionNodeView<'a> {
                             .into_iter()
                             .map(ExplorerConnectionNodeAction::Schema),
                     );
+                } else if !self.model.is_active {
+                    let hint = draw_hint_row(ui, &self.theme, 1, Icon::CircleCheck, "Connected — click to make active");
+                    if hint.clicked() {
+                        actions.push(ExplorerConnectionNodeAction::Connection(ConnectionRowAction::Connect));
+                    }
                 }
             } else if self.model.is_failed {
                 let error = self.model.error.as_deref().unwrap_or("Connection failed");

@@ -174,6 +174,10 @@ impl DbProApp {
 
     /// Apply scan results finished on a worker thread (#393).
     fn poll_workspace_tasks(&mut self) {
+        // #579: search / preview / replace-all / refactor results.
+        self.workspace.files.poll_read_task(&mut self.feedback);
+        // #579/#569: `poll_task` publishes `last_task` and the exit-code message.
+        self.workspace.files.poll_task(&mut self.feedback);
         if let Some((indexed, error, _roots)) = self.workspace.files.poll_scan_task() {
             self.feedback.runtime_message = match error {
                 Some(error) => format!("Workspace scan failed: {error}"),
@@ -397,6 +401,7 @@ impl DbProApp {
             auth_kind: "password".to_owned(),
             cloud_snippet: String::new(),
             cloud_guidance: String::new(),
+            create_if_missing: false,
         });
         self.connection.dialog.clear_error();
         self.connection.dialog.clear_test();
@@ -420,6 +425,7 @@ impl DbProApp {
             driver: "SQLite".to_owned(),
             ssl_mode: crate::UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: vec!["sample".to_owned(), "sqlite".to_owned()],
             group: Some("Local Samples".to_owned()),
             favorite: true,
@@ -633,7 +639,7 @@ impl DbProApp {
             check_constraints: Vec::new(),
             dependencies: Vec::new(),
         });
-        self.table.data_query.result = Some(crate::UiQueryResult {
+        self.table.data_query.set_result(crate::UiQueryResult {
             columns: vec![
                 crate::UiColumn {
                     name: "id".to_owned(),
@@ -702,6 +708,7 @@ impl DbProApp {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: crate::UiSslMode::Require,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -753,24 +760,26 @@ impl DbProApp {
         self.table.editing.record_view_open = true;
         match state {
             "changed" => {
-                if let Some(result) = self.table.data_query.result.take() {
+                if let Some(result) = self.table.data_query.result.clone() {
                     self.table.editing.data_editing_cell = Some((0, 1));
                     self.table.editing.data_edit_value = "updated@example.com".to_owned();
-                    self.submit_data_cell_edit(&result, 0, 1);
-                    self.table.data_query.result = Some(result);
+                    self.submit_data_cell_edit(result.as_ref(), 0, 1);
                 }
                 self.table.editing.record_view_open = false;
             }
             "loading" => {
-                self.table.data_query.result = None;
+                self.table.data_query.clear_result();
                 self.table.data_query.error = None;
             }
             "error" => {
-                self.table.data_query.result = None;
+                self.table.data_query.clear_result();
                 self.table.data_query.error = Some(t!("workspace.connection_interrupted").into_owned());
             }
             "empty" => {
                 if let Some(result) = &mut self.table.data_query.result {
+                    // The grid is shared behind an `Rc` (#581): copy-on-write
+                    // before clearing it so other holders keep their rows.
+                    let result = std::rc::Rc::make_mut(result);
                     result.rows.clear();
                     result.row_count = 0;
                 }
@@ -790,7 +799,7 @@ impl DbProApp {
             self.open_table_workspace_for_capture();
         }
         if std::env::var_os("DB_PRO_CAPTURE_PROFILE_NUMERIC").is_some() {
-            if let Some(result) = self.table.data_query.result.as_mut() {
+            if let Some(result) = self.table.data_query.result_mut() {
                 result.columns[0].data_type = "BIGINT".to_owned();
                 for row in &mut result.rows {
                     row[0] = crate::UiCell::Number("1000000000000000000".to_owned());
@@ -942,6 +951,7 @@ impl DbProApp {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: crate::UiSslMode::Require,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -1078,6 +1088,7 @@ impl DbProApp {
             driver: "PostgreSQL".to_owned(),
             ssl_mode: crate::UiSslMode::Require,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -1151,6 +1162,7 @@ impl DbProApp {
             driver: "SQLite".to_owned(),
             ssl_mode: crate::UiSslMode::Disable,
             readonly: false,
+            create_if_missing: false,
             tags: Vec::new(),
             group: None,
             favorite: false,
@@ -1358,7 +1370,7 @@ impl DbProApp {
             WorkspaceTab::SchemaObject => {
                 self.schema.explorer.selected_schema_object = None;
                 self.schema.explorer.schema_object_view = SchemaObjectView::Definition;
-                self.table.data_query.result = None;
+                self.table.data_query.clear_result();
                 self.table.data_query.total_rows = None;
                 self.table.data_query.request = None;
             }

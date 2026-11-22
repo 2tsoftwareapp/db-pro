@@ -30,7 +30,8 @@ async fn setup() -> (SQLiteConnector, db_pro_core::domain::connection::Connectio
         favorite: false,
         environment: Default::default(),
         readonly: false,
-    };
+        create_if_missing: false,
+};
     let handle = connector.connect(&config, "").await.unwrap();
     (connector, handle)
 }

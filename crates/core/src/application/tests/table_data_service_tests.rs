@@ -51,7 +51,8 @@ fn mock_connections() -> MockConnectionRepository {
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        }))
+            create_if_missing: false,
+}))
     });
     repo
 }
@@ -699,8 +700,10 @@ async fn apply_mutations_detailed_retains_zero_statement_index_on_validation_fai
             group: None,
             favorite: false,
             environment: Default::default(),
-            readonly: true, // Read-only connection triggers validation failure
-        }))
+            // Read-only connection triggers validation failure
+            readonly: true,
+            create_if_missing: false,
+}))
     });
 
     let service = TableDataService::new(Box::new(connector), registry, Box::new(repo));
@@ -873,7 +876,8 @@ async fn insert_row_blocked_on_readonly() {
             favorite: false,
             environment: Default::default(),
             readonly: true,
-        }))
+            create_if_missing: false,
+}))
     });
     let svc = TableDataService::new(Box::new(connector), registry, Box::new(repo));
     let result = svc

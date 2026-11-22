@@ -10,6 +10,11 @@ pub struct DialogFrame<'a> {
     pub body_height: Option<f32>,
     pub inner_width: f32,
     pub theme: DbProTheme,
+    /// Optional Id salt for the body scroll area. The area otherwise derives
+    /// its identity from its position in the UI hierarchy, which is stable
+    /// across a dialog close/open cycle — pass a fresh value per open to
+    /// reset the scroll offset back to the top (#609).
+    pub body_scroll_salt: Option<egui::Id>,
 }
 
 impl<'a> DialogFrame<'a> {
@@ -17,6 +22,9 @@ impl<'a> DialogFrame<'a> {
     pub fn body<R>(&mut self, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
         let inner_w = self.inner_width;
         let area = egui::ScrollArea::vertical()
+            // Stable per-dialog salt via the caller's ui — never a shared constant,
+            // which would let two dialogs fight over one scroll offset (#609).
+            .id_salt(self.body_scroll_salt.unwrap_or_else(|| self.ui.id().with("body_scroll")))
             .max_width(inner_w)
             // A body that overflows must advertise its scrollability; hiding the
             // bar made long dialogs look truncated with no way to discover more.

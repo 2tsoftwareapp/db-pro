@@ -177,7 +177,7 @@ pub(crate) fn on_table_data_loaded(
             });
         }
     }
-    data_query.result = Some(result);
+    data_query.set_result(result);
     data_query.total_rows = Some(total_rows);
     data_query.inline_query_result = false;
     data_query.last_result_row_limit = None;
@@ -239,7 +239,7 @@ pub(crate) fn on_table_row_reloaded(
     let server_row = server_rows.into_iter().next().expect("checked non-empty");
 
     let mut replaced_row = false;
-    if let Some(table_result) = data_query.result.as_mut() {
+    if let Some(table_result) = data_query.result_mut() {
         let column_indexes: std::collections::HashMap<&str, usize> = table_result
             .columns
             .iter()

@@ -42,3 +42,48 @@ fn oversized_bytes_are_marked_as_truncated() {
     let full = map_cell(CellValue::Bytes(vec![0x41; MAX_CELL_TEXT_BYTES / 2]));
     assert!(!full.is_truncated(), "a bytea value at the cap is not truncated");
 }
+
+/// #587: a declared text-ish column must keep its bytes, even when the content
+/// looks like a date/number/UUID.
+#[test]
+fn text_columns_are_never_retyped_by_content_587() {
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Text("2024-01-02".to_owned()), "varchar(20)"),
+        Some(CellValue::Text("2024-01-02".to_owned()))
+    );
+    assert_eq!(
+        ui_cell_to_domain_typed(
+            UiCell::Text("2f1c0a52-3d8f-4c1a-9a2f-2f9d0c7b1e11".to_owned()),
+            "TEXT"
+        ),
+        Some(CellValue::Text("2f1c0a52-3d8f-4c1a-9a2f-2f9d0c7b1e11".to_owned()))
+    );
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Number("42".to_owned()), "citext"),
+        Some(CellValue::Text("42".to_owned()))
+    );
+    // Non-text columns keep their declared-type handling.
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Text("2024-01-02".to_owned()), "date"),
+        Some(CellValue::Date("2024-01-02".to_owned()))
+    );
+}
+
+/// #592: JSON columns keep their exact document text — no rounding, no key
+/// reordering — so editing one key cannot silently rewrite the others.
+#[test]
+fn json_columns_round_trip_verbatim_592() {
+    let document = r#"{"b":1,"a":0.1234567890123456789,"big":123456789012345678901234}"#;
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Text(document.to_owned()), "jsonb"),
+        Some(CellValue::Text(document.to_owned()))
+    );
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Json(document.to_owned()), "json"),
+        Some(CellValue::Text(document.to_owned()))
+    );
+    assert_eq!(
+        ui_cell_to_domain_typed(UiCell::Null, "jsonb"),
+        Some(CellValue::Null)
+    );
+}

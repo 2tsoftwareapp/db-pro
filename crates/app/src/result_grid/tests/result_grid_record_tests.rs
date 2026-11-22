@@ -96,7 +96,7 @@ fn record_click_copies_label_and_full_staged_value() {
     let mut app = DbProApp::default();
     app.open_table_workspace_for_capture();
     app.table.data.select_single_cell((0, 1));
-    let result = app.table.data_query.result.take().unwrap();
+    let result = app.table.data_query.result.clone().expect("grid").as_ref().clone();
     let value = "long staged value ".repeat(12);
     app.table.editing.data_editing_cell = Some((0, 1));
     app.table.editing.data_edit_value = value.clone();
@@ -126,7 +126,7 @@ fn record_click_copies_null_and_empty_values() {
     // copies as the Postgres `\copy` sentinel `\N` — neither reports "nothing to copy".
     let mut app = DbProApp::default();
     app.open_table_workspace_for_capture();
-    let mut result = app.table.data_query.result.take().unwrap();
+    let mut result = app.table.data_query.result.clone().expect("grid").as_ref().clone();
     result.rows[0][1] = UiCell::Text(String::new());
     result.rows[0][3] = UiCell::Null;
     app.table.data.select_single_row(0);
@@ -149,7 +149,7 @@ fn record_click_copies_null_and_empty_values() {
 fn record_mode_rejects_multi_selection_and_invalid_active_edit() {
     let mut app = DbProApp::default();
     app.open_table_workspace_for_capture();
-    let result = app.table.data_query.result.take().unwrap();
+    let result = app.table.data_query.result.clone().expect("grid").as_ref().clone();
     app.table.data.select_single_row(0);
     app.table.data.selected_rows.insert(1);
     app.set_table_data_presentation(table_data_surface_view::TableDataPresentation::Record, &result);

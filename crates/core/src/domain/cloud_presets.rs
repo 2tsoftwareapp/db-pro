@@ -220,29 +220,26 @@ pub fn parse_connection_snippet(raw: &str) -> Result<ParsedConnectionSnippet, St
     } else {
         (None, auth_host)
     };
+    // #598: decode every credential component, not just the password. Azure
+    // PostgreSQL users arrive as `user%40server` and databases as `my%20db`.
     let (username, password) = match userinfo {
         Some(u) => {
             if let Some((user, pass)) = u.split_once(':') {
-                (user.to_owned(), Some(percent_decode(pass)))
+                (percent_decode(user), Some(percent_decode(pass)))
             } else {
-                (u.to_owned(), None)
+                (percent_decode(u), None)
             }
         }
         None => (String::new(), None),
     };
-    let (host, port) = if let Some((h, p)) = hostport.rsplit_once(':') {
-        let port: u16 = p.parse().map_err(|_| format!("invalid port `{p}`"))?;
-        (h.trim_start_matches('[').trim_end_matches(']').to_owned(), port)
-    } else {
-        let default = match driver {
-            DriverType::Mysql => 3306,
-            DriverType::SqlServer => 1433,
-            _ => 5432,
-        };
-        (hostport.to_owned(), default)
+    let default_port = match driver {
+        DriverType::Mysql => 3306,
+        DriverType::SqlServer => 1433,
+        _ => 5432,
     };
+    let (host, port) = split_host_port(hostport, default_port)?;
     let (path, query) = path_query.split_once('?').unwrap_or((path_query, ""));
-    let database = path.trim_matches('/').to_owned();
+    let database = percent_decode(path.trim_matches('/'));
     let mut ssl_mode = None;
     for pair in query.split('&') {
         let mut kv = pair.splitn(2, '=');
@@ -269,22 +266,53 @@ pub fn parse_connection_snippet(raw: &str) -> Result<ParsedConnectionSnippet, St
     })
 }
 
+/// Split `host[:port]`, including bracketed IPv6 without a port (#598).
+fn split_host_port(hostport: &str, default_port: u16) -> Result<(String, u16), String> {
+    if let Some(rest) = hostport.strip_prefix('[') {
+        let (host, tail) = rest
+            .split_once(']')
+            .ok_or_else(|| format!("unterminated IPv6 host `{hostport}`"))?;
+        let port = match tail.strip_prefix(':') {
+            Some(port) => port.parse().map_err(|_| format!("invalid port `{port}`"))?,
+            None => default_port,
+        };
+        return Ok((host.to_owned(), port));
+    }
+    // An unbracketed host with more than one colon is a bare IPv6 address, not
+    // `host:port` — `rsplit_once(':')` used to slice the address itself.
+    let colons = hostport.matches(':').count();
+    if colons > 1 {
+        return Ok((hostport.to_owned(), default_port));
+    }
+    match hostport.rsplit_once(':') {
+        Some((host, port)) => Ok((
+            host.to_owned(),
+            port.parse().map_err(|_| format!("invalid port `{port}`"))?,
+        )),
+        None => Ok((hostport.to_owned(), default_port)),
+    }
+}
+
+/// Percent-decode to bytes, then UTF-8 (#598).
+///
+/// Pushing each byte through `as char` re-encoded every multi-byte UTF-8
+/// sequence as Latin-1 mojibake, so a Vietnamese password never matched.
 fn percent_decode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             if let (Some(h), Some(l)) = (from_hex(bytes[i + 1]), from_hex(bytes[i + 2])) {
-                out.push((h * 16 + l) as char);
+                out.push(h * 16 + l);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn from_hex(b: u8) -> Option<u8> {

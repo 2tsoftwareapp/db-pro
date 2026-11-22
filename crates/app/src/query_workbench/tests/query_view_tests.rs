@@ -59,7 +59,7 @@ mod egress_tests {
 
 mod export_tests {
     use super::super::*;
-    use crate::app::overlay_state::ExportFormat;
+    use crate::app::overlay_state::{ExportFormat, ExportNullMode};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -175,7 +175,9 @@ mod export_tests {
         app.export_result(&result);
         app.export_result_confirming_overwrite(&result);
 
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "id\n1\n");
+        // #612: CSV files now start with a UTF-8 BOM, so compare the payload.
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(written.trim_start_matches('\u{feff}'), "id\n1\n");
         assert_ne!(
             std::fs::metadata(&path).expect("metadata").ino(),
             inode_before,
@@ -184,6 +186,250 @@ mod export_tests {
         );
         assert_eq!(dir_entries(&dir), vec!["out.csv".to_owned()]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #612: CSV export phải mở đầu bằng BOM UTF-8 để Excel (locale vi-VN) đọc
+    /// đúng tiếng Việt; các format khác không được thêm BOM.
+    #[test]
+    fn csv_export_starts_with_a_utf8_bom_612() {
+        let dir = temp_dir("bom");
+        for (format, file, wants_bom) in [
+            (ExportFormat::Csv, "out.csv", true),
+            (ExportFormat::Tsv, "out.tsv", false),
+            (ExportFormat::Json, "out.json", false),
+        ] {
+            let path = dir.join(file);
+            let mut app = DbProApp {
+                overlay: OverlayState {
+                    export_open: true,
+                    export_path: path.to_string_lossy().into_owned(),
+                    export_format: format,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let result = UiQueryResult {
+                columns: vec![crate::UiColumn {
+                    name: "name".to_owned(),
+                    data_type: "text".to_owned(),
+                    nullable: false,
+                }],
+                rows: vec![vec![UiCell::Text("Nguyễn Văn An".to_owned())]],
+                row_count: 1,
+                duration_ms: 0,
+            };
+            app.export_result(&result);
+
+            let bytes = std::fs::read(&path).expect("exported file");
+            let has_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+            assert_eq!(has_bom, wants_bom, "{file} BOM mismatch");
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(text.contains("Nguyễn Văn An"), "{file} lost its text: {text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #612: dialog không được mở với ô Output file trống.
+    #[test]
+    fn export_dialog_prefills_a_default_path_612() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        let path = app.overlay.export_path.clone();
+        assert!(path.ends_with(".csv"), "default path must carry the format extension: {path}");
+        assert!(
+            std::path::Path::new(&path).is_absolute(),
+            "default path must be usable without typing: {path}"
+        );
+        assert!(path.contains("results"), "unnamed result falls back to a readable stem: {path}");
+    }
+
+    /// #621: đường dẫn do app tự đặt mang timestamp nên phải sinh lại mỗi lần
+    /// mở dialog; nếu giữ nguyên thì lần export sau lại dính prompt ghi đè.
+    #[test]
+    fn export_dialog_refreshes_an_app_generated_path_621() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                export_path: "/tmp/stale-from-last-export.csv".to_owned(),
+                export_path_is_default: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        assert_ne!(
+            app.overlay.export_path, "/tmp/stale-from-last-export.csv",
+            "a stale app-generated path must be regenerated"
+        );
+        assert!(app.overlay.export_path.ends_with(".csv"), "{}", app.overlay.export_path);
+        assert!(app.overlay.export_path_is_default);
+    }
+
+    /// #621: path người dùng tự gõ/Browse là lựa chọn của họ, không được ghi đè.
+    #[test]
+    fn export_dialog_keeps_a_user_chosen_path_621() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                export_path: "/tmp/my-own-target.csv".to_owned(),
+                export_path_is_default: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        assert_eq!(app.overlay.export_path, "/tmp/my-own-target.csv");
+        assert!(!app.overlay.export_path_is_default);
+    }
+
+    /// #612: NULL được viết theo lựa chọn — mặc định CSV là ô rỗng, `\N` vẫn
+    /// chọn được để round-trip `COPY` (#487).
+    #[test]
+    fn delimited_export_null_spelling_follows_the_selected_mode_612() {
+        let dir = temp_dir("null-mode");
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "value".to_owned(),
+                data_type: "text".to_owned(),
+                nullable: true,
+            }],
+            rows: vec![
+                vec![UiCell::Null],
+                vec![UiCell::Text(String::new())],
+            ],
+            row_count: 2,
+            duration_ms: 0,
+        };
+
+        for (mode, expected) in [
+            (ExportNullMode::Empty, "value\n\n\n"),
+            (ExportNullMode::Literal, "value\nNULL\n\n"),
+            (ExportNullMode::Sentinel, "value\n\\N\n\n"),
+        ] {
+            let file = format!("out-{}.csv", mode.label().replace('\\', "sentinel"));
+            let path = dir.join(file);
+            let mut app = DbProApp {
+                overlay: OverlayState {
+                    export_open: true,
+                    export_path: path.to_string_lossy().into_owned(),
+                    export_format: ExportFormat::Csv,
+                    export_null: mode,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            app.export_result(&result);
+
+            let written = std::fs::read_to_string(&path).expect("exported file");
+            assert_eq!(
+                written.trim_start_matches('\u{feff}'),
+                expected,
+                "mode {:?} spelled NULL wrong",
+                mode
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #616: dialog Export phải thật sự được dựng, không chỉ set cờ. UAT headless
+    /// chỉ đọc được accessibility tree (Screen Recording bị từ chối), nên đây là
+    /// mức kiểm chứng đúng: dialog có node trong tree hay không.
+    #[test]
+    fn export_dialog_is_drawn_into_the_accessibility_tree() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_path: "out.csv".to_owned(),
+                export_format: ExportFormat::Csv,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+
+        let mut labels: Vec<String> = Vec::new();
+        // `Dialog` fades in over a few passes, so drive several frames.
+        for _ in 0..10 {
+            let output = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+                app.draw_export_dialog(ui, Some(&result));
+            });
+            if let Some(update) = output.platform_output.accesskit_update {
+                labels = update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| node.label().map(str::to_owned))
+                    .collect();
+                if labels.iter().any(|label| label.contains("Export")) {
+                    break;
+                }
+            }
+        }
+        assert!(
+            labels.iter().any(|label| label.contains("Export")),
+            "export dialog never reached the accessibility tree: {labels:?}"
+        );
     }
 
     #[test]
@@ -228,7 +474,9 @@ mod export_tests {
 
         assert!(app.overlay.export_overwrite_pending.is_none());
         assert!(!app.overlay.export_open);
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "id\n1\n");
+        // #612: CSV files now start with a UTF-8 BOM, so compare the payload.
+        let written = std::fs::read_to_string(&path).expect("read");
+        assert_eq!(written.trim_start_matches('\u{feff}'), "id\n1\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

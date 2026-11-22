@@ -57,7 +57,7 @@ fn sqlite_draft_is_exempt_from_host_and_username() {
         username: String::new(),
         port: String::new(),
         ..Default::default()
-    };
+};
     assert_eq!(validate_connection_draft(&draft), Ok(()));
 }
 
@@ -84,4 +84,64 @@ fn connect_command_keeps_connection_identity_explicit() {
             connection_id,
         } if connection_id == "conn-1"
     ));
+}
+
+/// #609: the dialog shows a placeholder while a test runs; when the runtime
+/// answers with the real reason, the FAIL line must carry it instead of leaving
+/// "Authentication pending…" on screen.
+#[test]
+fn auth_failure_rewrites_the_pending_stage_609() {
+    use db_pro_core::domain::connection_diagnostics::{ConnectionDiagnosticsReport, ConnectionStage, StageResult};
+
+    let mut report = ConnectionDiagnosticsReport {
+        stages: vec![
+            StageResult {
+                stage: ConnectionStage::Tcp,
+                ok: true,
+                message: "connected".to_owned(),
+            },
+            StageResult {
+                stage: ConnectionStage::Auth,
+                ok: true,
+                message: "Authentication pending…".to_owned(),
+            },
+        ],
+        failed_stage: None,
+    };
+    mark_diagnostics_auth_failed(&mut report, "password authentication failed for user \"dbpro\"");
+
+    let auth = report
+        .stages
+        .iter()
+        .find(|stage| stage.stage == ConnectionStage::Auth)
+        .expect("auth stage");
+    assert!(!auth.ok);
+    assert!(auth.message.contains("password authentication failed"), "{auth:?}");
+    assert!(!auth.message.contains("pending"), "placeholder survived: {auth:?}");
+    assert_eq!(report.failed_stage, Some(ConnectionStage::Auth));
+    // The probe-time network verdict is the better headline, so it stays.
+    assert_eq!(
+        report.stages.iter().filter(|stage| !stage.ok).count(),
+        1,
+        "only the auth stage flips"
+    );
+}
+
+/// #609: a transport failure found by the probe stays the headline when the
+/// runtime later reports an auth error.
+#[test]
+fn transport_verdict_outranks_a_later_auth_error_609() {
+    use db_pro_core::domain::connection_diagnostics::{ConnectionDiagnosticsReport, ConnectionStage, StageResult};
+
+    let mut report = ConnectionDiagnosticsReport {
+        stages: vec![StageResult {
+            stage: ConnectionStage::Tcp,
+            ok: false,
+            message: "connect refused".to_owned(),
+        }],
+        failed_stage: Some(ConnectionStage::Tcp),
+    };
+    mark_diagnostics_auth_failed(&mut report, "password authentication failed");
+
+    assert_eq!(report.failed_stage, Some(ConnectionStage::Tcp));
 }

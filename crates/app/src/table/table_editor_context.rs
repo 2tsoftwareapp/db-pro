@@ -415,7 +415,7 @@ impl<'a> TableMutationContext<'a> {
         self.table_mutation.pending_changes_open = false;
         self.table_mutation.staged_apply_confirm = false;
         self.table_editing.data_edit_value.clear();
-        self.table_data_query.result = None;
+        self.table_data_query.clear_result();
         self.table_data_query.error = None;
         self.feedback.set_runtime_message("Staged changes discarded");
         true

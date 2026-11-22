@@ -13,6 +13,7 @@ fn connection() -> UiConnectionSummary {
         driver: "PostgreSQL".to_owned(),
         ssl_mode: UiSslMode::Require,
         readonly: false,
+        create_if_missing: false,
         tags: Vec::new(),
         group: None,
         favorite: false,

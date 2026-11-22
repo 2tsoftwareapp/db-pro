@@ -53,6 +53,7 @@ pub(super) fn on_query_multi_completed(
             .filter_map(|statement| statement.result_set.take())
             .map(std::rc::Rc::new)
             .collect();
+        doc.results_stale = false;
         doc.query_result = None;
         doc.query_result_row_limit = doc.executing_row_limit;
         doc.active_result_index = 0;

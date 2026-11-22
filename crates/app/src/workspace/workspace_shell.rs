@@ -80,6 +80,8 @@ impl WorkspaceShellState {
     }
 
     pub(crate) fn set_bottom_panel_height(&mut self, height: f32) {
+        // The stored height is bounded by the absolute range; the per-frame layout
+        // further clamps it to the space actually available (#576).
         self.bottom_panel_height = height.clamp(OUTPUT_MIN_HEIGHT, OUTPUT_MAX_HEIGHT);
     }
 

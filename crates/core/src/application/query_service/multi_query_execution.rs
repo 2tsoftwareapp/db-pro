@@ -38,7 +38,7 @@ impl MultiQueryExecution<'_> {
         }
     }
 
-    fn validate_transactional_batch(&self) -> Option<(usize, MultiQueryError)> {
+    pub(super) fn validate_transactional_batch(&self) -> Option<(usize, MultiQueryError)> {
         for (index, statement) in self.statements.iter().enumerate() {
             if let Err(message) = validate_against_policy(statement, self.policy) {
                 return Some((index, MultiQueryError::message(message)));

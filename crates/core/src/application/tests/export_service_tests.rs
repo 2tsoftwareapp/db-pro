@@ -75,7 +75,8 @@ fn build_service(connector: MockDbConnector, registry: Arc<ConnectionRegistry>) 
             favorite: false,
             environment: Default::default(),
             readonly: false,
-        }))
+            create_if_missing: false,
+}))
     });
     ExportService::new(Box::new(connector), registry, Box::new(connections))
 }
@@ -288,7 +289,8 @@ async fn export_rejects_mutating_query_on_readonly_connection() {
             favorite: false,
             environment: Default::default(),
             readonly: true,
-        }))
+            create_if_missing: false,
+}))
     });
 
     let svc = ExportService::new(Box::new(MockDbConnector::new()), registry, Box::new(connections));

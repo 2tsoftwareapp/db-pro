@@ -232,15 +232,22 @@ impl ApplyPlanBuilder {
                 UiTableMutation::Delete {
                     pk_columns: identity.original_pk_columns.clone(),
                     pk_values: identity.original_pk_values.clone(),
+                    pk_data_types: identity.original_pk_data_types.clone(),
                 },
                 MutationTarget::Delete {
                     identity: identity.clone(),
                     current_row_index: *current_row_index,
                 },
             )),
-            StagedChange::Insert { columns, values, .. } => self.inserts.push((
+            StagedChange::Insert {
+                columns,
+                values,
+                data_types,
+                ..
+            } => self.inserts.push((
                 UiTableMutation::Insert {
                     columns: columns.clone(),
+                    data_types: data_types.clone(),
                     values: values.clone(),
                 },
                 MutationTarget::Insert,
@@ -291,6 +298,7 @@ impl ApplyPlanBuilder {
                 values: update.values,
                 pk_columns: update.identity.original_pk_columns,
                 pk_values: update.identity.original_pk_values,
+                pk_data_types: update.identity.original_pk_data_types,
             };
             plan.push(change, target);
         }
@@ -301,13 +309,18 @@ impl ApplyPlanBuilder {
     }
 }
 
+/// Keep the runtime's own code for SQL-originated failures — flattening a
+/// real error (`QUERY_FAILED` carrying a PG message like
+/// `operator does not exist: text = uuid`) into `INTERNAL` throws away the
+/// only machine-readable hint we have (#610). Only the generic wrapper is
+/// shortened for the badge.
 fn normalize_failure_code(code: &str) -> &str {
     match code {
         "CONSTRAINT_VIOLATION" => "CONSTRAINT_VIOLATION",
         "VALIDATION_ERROR" => "VALIDATION_ERROR",
         "CONFLICT" => "CONFLICT",
         "INTERNAL_ERROR" => "INTERNAL",
-        _ => "INTERNAL",
+        other => other,
     }
 }
 

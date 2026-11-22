@@ -36,7 +36,8 @@ pub use db_transfer::{
     DbColumnSpec, GeneratorTableSource, MemoryTableTarget,
 };
 pub use delimited_transfer::{
-    csv_cell_from_display, guard_csv_field, DelimitedFileSource, DelimitedFileTarget, DelimitedFormat,
+    csv_cell_from_display, guard_csv_field, guard_csv_field_with, DelimitedFileSource, DelimitedFileTarget,
+    DelimitedFormat, DelimitedSafety,
 };
 pub use driver_dialect::DriverDialect;
 pub use export_service::{ExportResult, ExportService};
@@ -47,6 +48,8 @@ pub use monitoring_service::MonitoringService;
 pub use object_mutation_service::ObjectMutationService;
 pub use query_schema::{active_query_schema, with_query_schema};
 pub use query_service::{MultiQueryError, MultiQueryResult, QueryService, StatementResultKind};
+#[cfg(test)]
+pub(crate) use query_service::history_sql_for_test;
 pub use query_session::{active_query_session, with_query_session};
 pub use registry::ConnectionRegistry;
 pub use rls_service::RlsService;

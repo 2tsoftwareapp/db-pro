@@ -180,7 +180,7 @@ fn test_validate_connection_draft() {
     let mut draft = UiConnectionDraft {
         name: String::new(),
         ..Default::default()
-    };
+};
     assert!(validate_connection_draft(&draft).is_err());
 
     draft.name = "Test DB".into();
@@ -223,7 +223,7 @@ fn driver_switch_preserves_typed_values() {
         port: "5433".to_owned(),
         ssl_mode: UiSslMode::VerifyFull,
         ..Default::default()
-    };
+};
 
     select_driver(&mut draft, UiDriver::Mysql);
     assert_eq!(draft.driver, UiDriver::Mysql);
@@ -304,7 +304,7 @@ fn engine_select_opens_on_click_and_applies_the_chosen_driver() {
         name: "t".into(),
         database: "t".into(),
         ..Default::default()
-    };
+};
     let trigger_rect = Rc::new(Cell::new(egui::Rect::NOTHING));
 
     let collect_texts = |output: &egui::FullOutput| -> Vec<String> {
@@ -402,7 +402,7 @@ fn sqlite_driver_keeps_existing_port_and_skips_port_validation() {
         port: "9999".into(),
         ssl_mode: UiSslMode::VerifyFull,
         ..Default::default()
-    };
+};
     draft.driver = UiDriver::Mysql;
     select_driver(&mut draft, UiDriver::Sqlite);
     // SQLite is file-backed: driver switch must not touch host-side fields.
@@ -426,7 +426,7 @@ fn cloud_preset_applies_driver_port_ssl_and_only_overwrites_placeholder_hosts() 
     let mut draft = UiConnectionDraft {
         cloud_preset: "aws_rds:postgres".into(),
         ..Default::default()
-    };
+};
     let guidance = apply_cloud_preset_to_draft(&mut draft, "aws_rds:postgres").expect("known preset applies");
     assert_eq!(draft.driver, UiDriver::Postgres);
     assert_eq!(draft.port, "5432");
@@ -483,7 +483,7 @@ fn ssh_profile_roundtrip_requires_identity_fields_and_restores_draft() {
         ssh_private_key: "/keys/id_ed25519".into(),
         ssh_port: String::new(), // unset → profile defaults to 22
         ..Default::default()
-    };
+};
     let profile_id = save_ssh_profile(&mut profiles, &draft).unwrap();
     assert_eq!(profiles.len(), 1);
     assert_eq!(profiles[0].port, 22);

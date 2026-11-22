@@ -2,6 +2,10 @@
 use super::super::audit_state::AuditState;
 use super::super::*;
 
+/// Audit rows painted per frame (#569).
+const AUDIT_ROW_CAP: usize = 80;
+
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum AuditSurfaceAction {
     Refresh,
@@ -104,7 +108,11 @@ impl AuditSurfaceContext<'_> {
         if page.source.kind == db_pro_core::domain::audit::AuditSourceKind::Unavailable {
             ui.colored_label(self.theme.warning, &page.source.guidance);
         }
-        for event in page.events.iter().take(80) {
+        // #569: disclose the cap so a truncated audit list never reads as complete.
+        if let Some(hint) = crate::components::common::shown_total_hint(AUDIT_ROW_CAP, page.events.len()) {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
+        for event in page.events.iter().take(AUDIT_ROW_CAP) {
             self.draw_event(ui, event, actions);
         }
         if let Some(preview) = &self.state.audit_export_preview {

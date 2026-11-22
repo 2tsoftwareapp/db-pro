@@ -68,7 +68,7 @@ pub use common::{
     activity_bar_frame, agent_message_frame, app_frame, calculate_dialog_layout, calculate_sheet_layout, chip_frame,
     clamp_popup_to_screen, editor_frame, format_bytes, format_count_with_suffix, format_duration_millis,
     format_page_range, format_percentage, grid_frame, icon_text, list_row_frame, panel_frame, shell_surface_frame,
-    sidebar_frame, tab_frame, toolbar_frame, truncate_ellipsis, DialogLayout, ShellSurface,
+    sidebar_frame, shown_total_hint, tab_frame, toolbar_frame, truncate_ellipsis, DialogLayout, ShellSurface,
 };
 pub use database::{ConnectionCard, ConnectionCardAction, ConnectionStatus, DatabaseDriver, DatabaseTypeBadge};
 pub use dev_tools::{ProgressRing, TerminalBlock};

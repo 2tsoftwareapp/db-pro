@@ -34,7 +34,9 @@ pub struct SyntaxToken {
 
 #[derive(Debug, Clone, Default)]
 pub struct CachedSqlTokens {
-    tokens: Vec<SyntaxToken>,
+    /// Shared, immutable token list. `Arc` so the render pass can hold a
+    /// reference for the whole frame without cloning the vector (#581).
+    tokens: std::sync::Arc<[SyntaxToken]>,
     version: u64,
     dialect: SqlDialect,
     initialized: bool,
@@ -55,12 +57,21 @@ impl CachedSqlTokens {
             return &self.tokens;
         }
         let highlighter = SqlHighlighter::new(dialect);
-        self.tokens = highlighter.tokenize(buffer.text());
+        self.tokens = highlighter.tokenize(buffer.text()).into();
         self.version = buffer.version();
         self.dialect = dialect;
         self.initialized = true;
         self.last_incremental_from = None;
         &self.tokens
+    }
+
+    /// Recompute (if needed) and hand back a shared handle to the token list.
+    ///
+    /// The renderer keeps this across its paint pass instead of copying the
+    /// tokens into a local `Vec` every frame (#581).
+    pub fn shared(&mut self, buffer: &TextBuffer, dialect: SqlDialect) -> std::sync::Arc<[SyntaxToken]> {
+        self.get_or_recompute(buffer, dialect);
+        std::sync::Arc::clone(&self.tokens)
     }
 
     /// Retokenize the edited line and the next one, then splice. Falls back when the
@@ -146,14 +157,14 @@ impl CachedSqlTokens {
             token.range.1 += region_start;
         }
 
-        let mut spliced = Vec::with_capacity(self.tokens.len());
-        for token in &self.tokens {
+        let mut spliced: Vec<SyntaxToken> = Vec::with_capacity(self.tokens.len());
+        for token in self.tokens.iter() {
             if token.range.1 <= region_start {
                 spliced.push(token.clone());
             }
         }
         spliced.extend(fresh);
-        for token in &self.tokens {
+        for token in self.tokens.iter() {
             if token.range.0 >= region_end_old {
                 let Some(shifted_start) = shift_offset(token.range.0, delta) else {
                     return false;
@@ -170,7 +181,7 @@ impl CachedSqlTokens {
         if !tokens_cover(&spliced, text.len()) {
             return false;
         }
-        self.tokens = spliced;
+        self.tokens = spliced.into();
         self.version = buffer.version();
         self.dialect = dialect;
         self.initialized = true;
@@ -425,6 +436,10 @@ const SQL_FUNCTIONS: &[&str] = &[
     "SHA256",
 ];
 
+fn is_identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_' || b >= 128
+}
+
 pub struct SqlHighlighter {
     pub dialect: SqlDialect,
 }
@@ -525,10 +540,18 @@ impl SqlHighlighter {
                 }
             }
 
-            // String literal: '...'
+            // String literal: '...' — standard conforming strings do NOT
+            // treat backslash as an escape; only E'...' strings (Postgres)
+            // and the Generic dialect do. `\\'` inside an E-string does not
+            // terminate it (#611).
             if b == b'\'' {
+                let escapes = self.string_escapes_active(bytes, i);
                 i += 1;
                 while i < len {
+                    if escapes && bytes[i] == b'\\' && i + 1 < len {
+                        i += 2;
+                        continue;
+                    }
                     if bytes[i] == b'\'' {
                         i += 1;
                         // Escaped quote ''
@@ -538,11 +561,7 @@ impl SqlHighlighter {
                         }
                         break;
                     }
-                    if bytes[i] == b'\\' && i + 1 < len {
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
+                    i += 1;
                 }
                 tokens.push(SyntaxToken {
                     range: (start, i),
@@ -649,6 +668,27 @@ impl SqlHighlighter {
         }
 
         tokens
+    }
+
+    /// Whether the string literal opening at `string_start` (index of the
+    /// quote byte) treats `\` as an escape character. Postgres only for
+    /// E'...' / e'...' strings; Generic (MySQL-style) always; SQLite never
+    /// (#611).
+    fn string_escapes_active(&self, bytes: &[u8], string_start: usize) -> bool {
+        match self.dialect {
+            SqlDialect::SQLite => false,
+            SqlDialect::Generic => true,
+            SqlDialect::Postgres => {
+                // E-prefix only when it stands as a word on its own.
+                if string_start >= 1 {
+                    let prev = bytes[string_start - 1];
+                    if prev == b'E' || prev == b'e' {
+                        return string_start < 2 || !is_identifier_byte(bytes[string_start - 2]);
+                    }
+                }
+                false
+            }
+        }
     }
 
     pub fn token_color(&self, kind: SyntaxTokenKind, theme: &DbProTheme) -> Color32 {

@@ -127,8 +127,7 @@ impl<'a> ExplorerSchemaObjectsView<'a> {
         let clip = ui.clip_rect();
         for table in &tables {
             let row_top = ui.cursor().min.y;
-            let row_bottom = row_top + EXPLORER_ROW_HEIGHT;
-            if row_bottom < clip.top() || row_top > clip.bottom() {
+            if crate::app::explorer_row_is_offscreen(row_top, EXPLORER_ROW_HEIGHT, clip) {
                 folder.draw_offscreen_row_spacer(ui);
                 continue;
             }

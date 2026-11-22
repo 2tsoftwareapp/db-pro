@@ -157,10 +157,17 @@ pub struct ConnectionConfig {
     /// Workspace environment label for safety UX.
     #[serde(default)]
     pub environment: ConnectionEnvironment,
-    /// If true, only read-only queries (SELECT, SHOW, EXPLAIN) are allowed.
-    /// Enforced at the backend application layer.
+    /// If true, only read-only queries (SELECT, SHOW, EXPLAIN) are allowed,
+    /// enforced both by the statement classifier and by the server
+    /// (`default_transaction_read_only` for PostgreSQL, `PRAGMA query_only` for
+    /// SQLite) — a `SELECT` can call a function that writes (#588).
     #[serde(default)]
     pub readonly: bool,
+    /// SQLite only: allow `connect` to create the database file when it does not
+    /// exist. Off by default, so a mistyped path fails instead of silently
+    /// producing an empty database (#597).
+    #[serde(default)]
+    pub create_if_missing: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -229,6 +236,7 @@ impl Default for ConnectionConfig {
             favorite: false,
             environment: ConnectionEnvironment::Development,
             readonly: false,
+            create_if_missing: false,
         }
     }
 }
@@ -246,12 +254,17 @@ fn default_query_timeout() -> u64 {
     30_000
 }
 
+/// Product ceiling for client-side row caps. The UI row-limit selector caps at
+/// this value and connectors stop reading there; `LIMIT`/`TOP` injection decides
+/// how many rows a plain read actually returns (#604).
+pub const PRODUCT_MAX_ROWS: u64 = 100_000;
+
 fn default_max_rows() -> u64 {
-    500
+    PRODUCT_MAX_ROWS
 }
 
 const MAX_CONNECTION_NAME_LEN: usize = 128;
-const MAX_MAX_ROWS: u64 = 100_000;
+const MAX_MAX_ROWS: u64 = PRODUCT_MAX_ROWS;
 
 /// True when a value would be parsed as a CLI option (`-oProxyCommand=…`) if it
 /// reached `ssh` as the positional `user@host` argument.

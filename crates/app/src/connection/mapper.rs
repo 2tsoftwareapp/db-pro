@@ -72,6 +72,7 @@ pub fn summary_to_edit_draft(connection: &UiConnectionSummary) -> UiConnectionDr
         driver: ui_driver_from_str(&connection.driver),
         ssl_mode: connection.ssl_mode,
         readonly: connection.readonly,
+        create_if_missing: connection.create_if_missing,
         group: connection.group.clone().unwrap_or_default(),
         tags: connection.tags.join(", "),
         favorite: connection.favorite,
@@ -172,7 +173,9 @@ pub fn draft_to_domain_config(draft: &UiConnectionDraft) -> ConnectionConfig {
             }
         },
         query_timeout_ms: 30_000,
-        max_rows: 500,
+        // Product ceiling, not a per-tab cap — the UI row-limit selector's
+        // injected LIMIT decides how many rows a read actually returns (#604).
+        max_rows: db_pro_core::domain::connection::PRODUCT_MAX_ROWS,
         color: None,
         tags: draft
             .tags
@@ -196,6 +199,7 @@ pub fn draft_to_domain_config(draft: &UiConnectionDraft) -> ConnectionConfig {
             _ => ConnectionEnvironment::Development,
         },
         readonly: draft.readonly,
+        create_if_missing: draft.create_if_missing,
     }
 }
 

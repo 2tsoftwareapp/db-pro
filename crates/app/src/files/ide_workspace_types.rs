@@ -65,6 +65,22 @@ pub enum MigrationStatus {
     Unknown,
 }
 
+impl MigrationStatus {
+    /// Display label; the UI must not print the variant name with `{:?}` (#569).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for MigrationStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchHit {
     pub root_id: String,
@@ -182,4 +198,20 @@ pub struct IdeWorkspaceState {
     pub schema_fingerprint: Option<u64>,
     pub schema_drift_message: Option<String>,
     pub last_drift_check: Option<Instant>,
+    /// Cache for [`IdeWorkspaceState::dependency_edges`] (#578).
+    ///
+    /// The Graph tab used to re-read every `.sql` file of every workspace root
+    /// from disk on **every frame** (caret blink, hover, 50 ms poll) just to show
+    /// the first 60 dependency edges. The edges are now computed once per
+    /// `index_epoch` and reused until the index (or a scanned root) changes.
+    pub dependency_edge_cache: Option<DependencyEdgeCache>,
+    /// Bumped on every index mutation; keys [`Self::dependency_edge_cache`].
+    pub index_epoch: u64,
+}
+
+/// Cached dependency edges plus the epoch that produced them (#578).
+#[derive(Debug, Clone)]
+pub struct DependencyEdgeCache {
+    pub index_epoch: u64,
+    pub edges: Vec<DependencyEdge>,
 }

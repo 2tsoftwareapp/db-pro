@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Statement rows painted per frame (#569).
+const WORKLOAD_STATEMENT_CAP: usize = 40;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum MonitoringWorkloadAction {
     SortChanged(db_pro_core::domain::monitoring::StatStatementSort),
@@ -32,12 +35,7 @@ impl MonitoringWorkloadContext<'_> {
         }
         self.draw_summary(ui, workload);
         actions.extend(self.draw_toolbar(ui));
-        let filter = self.filter.to_ascii_lowercase();
-        let rows = workload
-            .statements
-            .iter()
-            .filter(|statement| matches_filter(statement, &filter))
-            .take(40);
+        let rows = self.capped_statements(ui, workload);
         let mut row_count = 0;
         let previous_by_id = previous_totals(self.previous);
         for statement in rows {
@@ -53,6 +51,24 @@ impl MonitoringWorkloadContext<'_> {
             );
         }
         actions
+    }
+
+    /// Statements matching the filter, capped, with the "showing N of M" hint (#569).
+    fn capped_statements<'w>(
+        &self,
+        ui: &mut egui::Ui,
+        workload: &'w db_pro_core::domain::monitoring::StatStatementsSnapshot,
+    ) -> Vec<&'w db_pro_core::domain::monitoring::StatStatement> {
+        let filter = self.filter.to_ascii_lowercase();
+        let matching: Vec<_> = workload
+            .statements
+            .iter()
+            .filter(|statement| matches_filter(statement, &filter))
+            .collect();
+        if let Some(hint) = shown_total_hint(WORKLOAD_STATEMENT_CAP, matching.len()) {
+            ui.label(RichText::new(hint).small().color(self.theme.text_muted));
+        }
+        matching.into_iter().take(WORKLOAD_STATEMENT_CAP).collect()
     }
 
     fn draw_summary(&self, ui: &mut egui::Ui, workload: &db_pro_core::domain::monitoring::StatStatementsSnapshot) {

@@ -99,11 +99,11 @@ impl DbProApp {
             }
             ConnectionRowAction::CopyName => {
                 ui.output_mut(|output| output.commands.push(egui::OutputCommand::CopyText(connection.name.clone())));
-                self.feedback.runtime_message = format!("Copied `{}` to clipboard", connection.name);
+                self.feedback.runtime_message = t!("explorer.copy_to_clipboard", name = connection.name).to_string();
             }
             ConnectionRowAction::CopyConnectionString => {
                 ui.output_mut(|output| output.commands.push(egui::OutputCommand::CopyText(connection_display_uri(connection))));
-                self.feedback.runtime_message = "Copied connection string to clipboard".to_owned();
+                self.feedback.runtime_message = t!("explorer.copy_connection_string").to_string();
             }
             ConnectionRowAction::Edit => self.open_edit_connection(connection),
             ConnectionRowAction::Duplicate => self.open_duplicate_connection(connection),
@@ -141,7 +141,7 @@ impl DbProApp {
             }
             ExplorerSchemaTreeAction::CopySchemaName(schema) => {
                 ui.output_mut(|output| output.commands.push(egui::OutputCommand::CopyText(schema.clone())));
-                self.feedback.runtime_message = format!("Copied `{schema}` to clipboard");
+                self.feedback.runtime_message = t!("explorer.copy_to_clipboard", name = schema).to_string();
             }
             ExplorerSchemaTreeAction::DropSchema(schema) => self.plan_drop_schema(&schema),
             ExplorerSchemaTreeAction::SchemaObjects(action) => {

@@ -53,7 +53,7 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, String> {
             stderr.trim().to_owned()
         };
         Err(if detail.is_empty() {
-            format!("git {:?} failed", args)
+            format!("git {} failed", args.join(" "))
         } else {
             detail
         })

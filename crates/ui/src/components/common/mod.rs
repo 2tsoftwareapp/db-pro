@@ -10,8 +10,8 @@ mod layout;
 mod text;
 
 pub use format::{
-    format_bytes, format_count_with_suffix, format_duration_millis, format_page_range, format_percentage,
-    truncate_ellipsis,
+    fmt_opt, fmt_opt_duration_millis, format_bytes, format_count_with_suffix, format_duration_millis, format_page_range,
+    format_percentage, format_shown_total, shown_total_hint, truncate_ellipsis, VALUE_ABSENT,
 };
 pub use frames::{
     activity_bar_frame, agent_message_frame, app_frame, chip_frame, editor_frame, grid_frame, list_row_frame,

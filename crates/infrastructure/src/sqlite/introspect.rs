@@ -11,6 +11,7 @@ fn escape_identifier(name: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+// cc-scan:allow COMPLEXITY — one call per catalog facet
 pub fn run_introspection(conn: &rusqlite::Connection) -> Result<IntrospectResult, DbError> {
     let table_names = fetch_table_names(conn)?;
     let views = introspect_views(conn)?;
@@ -26,8 +27,8 @@ pub fn run_introspection(conn: &rusqlite::Connection) -> Result<IntrospectResult
     let check_constraints = introspect_check_constraints(conn, &table_names)?;
     let triggers = introspect_triggers(conn)?;
 
-    // Derive primary keys from already-fetched columns (no extra PRAGMA calls)
-    let primary_keys = derive_primary_keys(&columns);
+    // Derive primary keys from the declared key order, not the column order (#596)
+    let primary_keys = introspect_primary_keys(conn, &table_names)?;
 
     let schemas = vec![Schema { name: "main".into() }];
 
@@ -42,6 +43,7 @@ pub fn run_introspection(conn: &rusqlite::Connection) -> Result<IntrospectResult
         views,
         triggers,
         functions: Vec::new(),
+        table_definition_sql: introspect_table_definitions(conn, &table_names)?,
     })
 }
 
@@ -62,22 +64,41 @@ fn mark_unique_columns(columns: &mut [Column], indexes: &[Index]) {
     }
 }
 
-fn derive_primary_keys(columns: &[Column]) -> Vec<PrimaryKey> {
-    let mut pk_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
-    for col in columns {
-        if col.is_primary_key {
-            pk_map.entry(col.table_name.clone()).or_default().push(col.name.clone());
+/// Primary keys in their declared order (#596).
+///
+/// `table_xinfo` reports each column's 1-based position *within* the key in its
+/// `pk` field. Ordering by the column index instead turns `PRIMARY KEY (b, a)`
+/// into `(a, b)` — a different index, and the order a composite foreign key
+/// depends on.
+fn introspect_primary_keys(conn: &rusqlite::Connection, table_names: &[String]) -> Result<Vec<PrimaryKey>, DbError> {
+    let mut primary_keys = Vec::new();
+    for table_name in table_names {
+        let safe_name = escape_identifier(table_name);
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_xinfo({safe_name})"))
+            .map_err(crate::error::from_rusqlite)?;
+        let mut keyed: Vec<(i32, String)> = stmt
+            .query_map([], |row| {
+                let position: i32 = row.get(5)?;
+                let name: String = row.get(1)?;
+                Ok((position, name))
+            })
+            .map_err(crate::error::from_rusqlite)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(crate::error::from_rusqlite)?;
+        keyed.retain(|(position, _)| *position > 0);
+        if keyed.is_empty() {
+            continue;
         }
-    }
-    pk_map
-        .into_iter()
-        .map(|(table_name, columns)| PrimaryKey {
+        keyed.sort_by_key(|(position, _)| *position);
+        primary_keys.push(PrimaryKey {
             constraint_name: format!("{table_name}_pk"),
-            columns,
-            table_name,
+            columns: keyed.into_iter().map(|(_, name)| name).collect(),
+            table_name: table_name.clone(),
             schema: "main".into(),
-        })
-        .collect()
+        });
+    }
+    Ok(primary_keys)
 }
 
 fn fetch_table_names(conn: &rusqlite::Connection) -> Result<Vec<String>, DbError> {
@@ -103,7 +124,13 @@ fn introspect_tables(_conn: &rusqlite::Connection, table_names: &[String]) -> Re
         .collect())
 }
 
-// cc-scan:allow COMPLEXITY — classifier/dispatch ladder — one case per branch
+/// Columns, including generated ones (#596).
+///
+/// `PRAGMA table_info` hides generated/virtual columns; `table_xinfo` reports
+/// them with `hidden = 2` (virtual) or `3` (stored). A generated column the
+/// explorer cannot see is also a column the DDL cannot reproduce — the table
+/// would be cloned without it.
+// cc-scan:allow COMPLEXITY — one arm per `table_xinfo` column state
 fn introspect_columns(conn: &rusqlite::Connection, table_names: &[String]) -> Result<Vec<Column>, DbError> {
     let mut columns = Vec::new();
     for table_name in table_names {
@@ -111,7 +138,7 @@ fn introspect_columns(conn: &rusqlite::Connection, table_names: &[String]) -> Re
         // use safe identifier escaping instead.
         let safe_name = escape_identifier(table_name);
         let mut stmt = conn
-            .prepare(&format!("PRAGMA table_info({safe_name})"))
+            .prepare(&format!("PRAGMA table_xinfo({safe_name})"))
             .map_err(crate::error::from_rusqlite)?;
         let mut cols: Vec<Column> = stmt
             .query_map([], |row| {
@@ -120,6 +147,9 @@ fn introspect_columns(conn: &rusqlite::Connection, table_names: &[String]) -> Re
                 let notnull: bool = row.get(3)?;
                 let default: Option<String> = row.get(4)?;
                 let pk: bool = row.get::<_, i32>(5)? > 0;
+                // `hidden` reports 0 for ordinary columns, 1 for hidden
+                // virtual-table columns, and 2 or 3 for generated ones.
+                let hidden: i32 = row.get::<_, i32>(6).unwrap_or(0);
                 Ok(Column {
                     name,
                     data_type,
@@ -129,7 +159,7 @@ fn introspect_columns(conn: &rusqlite::Connection, table_names: &[String]) -> Re
                     is_primary_key: pk,
                     is_unique: false,
                     is_identity: false,
-                    is_generated: false,
+                    is_generated: hidden >= 2,
                     collation: None,
                     enum_labels: Vec::new(),
                     table_name: table_name.clone(),
@@ -606,6 +636,7 @@ fn introspect_views(conn: &rusqlite::Connection) -> Result<Vec<View>, DbError> {
                 name,
                 schema: "main".into(),
                 definition,
+                kind: RelationKind::View,
             })
         })
         .map_err(crate::error::from_rusqlite)?
@@ -688,3 +719,35 @@ fn has_sql_keyword_sequence(sql: &str, first: &str, second: &str) -> bool {
 #[cfg(test)]
 #[path = "tests/introspect_tests.rs"]
 mod tests;
+
+/// The `CREATE TABLE` text SQLite itself stores (#596).
+///
+/// `sqlite_master.sql` is the original statement, so it reproduces
+/// `AUTOINCREMENT`, `COLLATE NOCASE`, `WITHOUT ROWID`, `STRICT`, `ON CONFLICT`
+/// clauses and generated-column syntax exactly. Rebuilding the statement from
+/// `PRAGMA` metadata cannot, and a clone/migration built that way silently
+/// produced a different table.
+fn introspect_table_definitions(
+    conn: &rusqlite::Connection,
+    table_names: &[String],
+) -> Result<Vec<TableDefinitionSql>, DbError> {
+    let mut definitions = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")
+        .map_err(crate::error::from_rusqlite)?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(crate::error::from_rusqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(crate::error::from_rusqlite)?;
+    for (name, sql) in rows {
+        if table_names.iter().any(|table| table == &name) {
+            definitions.push(TableDefinitionSql {
+                schema: "main".into(),
+                table_name: name,
+                sql,
+            });
+        }
+    }
+    Ok(definitions)
+}

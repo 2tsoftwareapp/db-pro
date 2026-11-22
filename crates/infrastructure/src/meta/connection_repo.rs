@@ -5,6 +5,16 @@ use db_pro_core::ports::ConnectionRepository;
 
 use super::store::SQLiteMetaStore;
 
+/// Connections persisted before the row-cap fix (#604) carry a hard-coded
+/// `max_rows = 500` in their JSON blob. Lift any below-ceiling value to the
+/// product ceiling on read so the UI row-limit selector governs truncation;
+/// nothing legitimately sets a lower per-connection cap (there is no UI for it).
+fn lift_legacy_row_cap(connection: &mut Connection) {
+    if connection.config.max_rows < db_pro_core::domain::connection::PRODUCT_MAX_ROWS {
+        connection.config.max_rows = db_pro_core::domain::connection::PRODUCT_MAX_ROWS;
+    }
+}
+
 #[async_trait]
 impl ConnectionRepository for SQLiteMetaStore {
     async fn save(&self, connection: &Connection) -> Result<(), DbError> {
@@ -31,8 +41,9 @@ impl ConnectionRepository for SQLiteMetaStore {
         match rows.first() {
             Some(row) => {
                 let data = &row[0];
-                let conn: Connection = serde_json::from_str(data)
+                let mut conn: Connection = serde_json::from_str(data)
                     .map_err(|e| DbError::Internal(format!("deserialize connection: {e}")))?;
+                lift_legacy_row_cap(&mut conn);
                 Ok(Some(conn))
             }
             None => Ok(None),
@@ -50,8 +61,9 @@ impl ConnectionRepository for SQLiteMetaStore {
             .await?;
         let mut connections = Vec::new();
         for row in rows {
-            let conn: Connection =
+            let mut conn: Connection =
                 serde_json::from_str(&row[0]).map_err(|e| DbError::Internal(format!("deserialize connection: {e}")))?;
+            lift_legacy_row_cap(&mut conn);
             connections.push(conn);
         }
         Ok(connections)

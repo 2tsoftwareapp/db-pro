@@ -89,6 +89,7 @@ impl DbProApp {
         if !closed {
             return;
         }
+        self.connection.lifecycle.note_session_closed(&connection.id);
         self.management.audit.reset_connection_scope();
         self.management.monitoring.reset_connection_scope();
         // In-flight requests bound to this connection outlive the disconnect

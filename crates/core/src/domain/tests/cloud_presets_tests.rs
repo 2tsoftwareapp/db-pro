@@ -62,3 +62,38 @@ fn redacted_summary_has_no_secret() {
     assert!(!s.contains("password"));
     assert!(s.contains("EphemeralToken") || s.contains("ephemeral_token") || s.contains("auth="));
 }
+
+/// #598: percent-decode must work on bytes, and every credential component
+/// (user, password, database) must be decoded — not only the password.
+#[test]
+fn percent_decoding_is_utf8_aware_and_covers_all_parts_598() {
+    let parsed = parse_connection_snippet(
+        "postgresql://user%40srv:m%E1%BA%ADt%20kh%E1%BA%A9u@host:5432/my%20db",
+    )
+    .expect("uri parses");
+    assert_eq!(parsed.username, "user@srv");
+    assert_eq!(parsed.password.as_deref(), Some("mật khẩu"));
+    assert_eq!(parsed.database, "my db");
+
+    // Raw multi-byte UTF-8 in the URI is preserved (no Latin-1 re-encoding).
+    let parsed = parse_connection_snippet("postgresql://admin:mậtkhẩu@host/db").expect("uri parses");
+    assert_eq!(parsed.password.as_deref(), Some("mậtkhẩu"));
+}
+
+/// #598: a bracketed IPv6 host without a port keeps the default port instead of
+/// failing on `1]`.
+#[test]
+fn ipv6_hosts_parse_with_and_without_port_598() {
+    let parsed = parse_connection_snippet("postgresql://u:p@[::1]/db").expect("ipv6 without port");
+    assert_eq!(parsed.host, "::1");
+    assert_eq!(parsed.port, 5432);
+
+    let parsed = parse_connection_snippet("postgresql://u:p@[2001:db8::1]:6432/db").expect("ipv6 with port");
+    assert_eq!(parsed.host, "2001:db8::1");
+    assert_eq!(parsed.port, 6432);
+
+    // Bare (unbracketed) IPv6 also keeps the default port.
+    let parsed = parse_connection_snippet("postgresql://u:p@2001:db8::1/db").expect("bare ipv6");
+    assert_eq!(parsed.host, "2001:db8::1");
+    assert_eq!(parsed.port, 5432);
+}

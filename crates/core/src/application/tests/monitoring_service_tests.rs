@@ -28,6 +28,7 @@ fn config(driver: DriverType) -> ConnectionConfig {
         favorite: false,
         environment: Default::default(),
         readonly: false,
+        create_if_missing: false,
     }
 }
 

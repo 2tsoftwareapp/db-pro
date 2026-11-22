@@ -201,9 +201,58 @@ pub(crate) fn ui_cell_to_domain(cell: UiCell) -> Option<CellValue> {
     }
 }
 
+/// Keep a cell's own text instead of re-typing it (#587/#592).
+fn cell_as_text(cell: UiCell) -> Option<CellValue> {
+    match cell {
+        UiCell::Null => Some(CellValue::Null),
+        UiCell::Text(value) | UiCell::Json(value) | UiCell::Number(value) => Some(CellValue::Text(value)),
+        other => ui_cell_to_domain(other),
+    }
+}
+
+/// JSON columns keep their exact text (#592).
+fn is_json_column_type(normalized: &str) -> bool {
+    matches!(
+        normalized.split('(').next().unwrap_or(normalized).trim(),
+        "json" | "jsonb"
+    )
+}
+
+/// Character types that must never be re-typed by content (#587).
+fn is_text_column_type(normalized: &str) -> bool {
+    let base = normalized.split('(').next().unwrap_or(normalized).trim();
+    matches!(
+        base,
+        "text"
+            | "varchar"
+            | "character varying"
+            | "char"
+            | "character"
+            | "bpchar"
+            | "citext"
+            | "name"
+            | "xml"
+            | "nvarchar"
+            | "nchar"
+            | "clob"
+    )
+}
+
 // cc-scan:allow COMPLEXITY — classifier/dispatch ladder — one case per branch
 pub(crate) fn ui_cell_to_domain_typed(cell: UiCell, data_type: &str) -> Option<CellValue> {
     let normalized = data_type.to_ascii_lowercase();
+    // #592/#587: JSON and character columns keep their exact bytes. JSON went
+    // through `serde_json::Value` (rounding big numbers, reordering keys) and
+    // text went through content sniffing (turning "2024-01-02" into a Date).
+    if is_json_column_type(&normalized) || is_text_column_type(&normalized) {
+        return cell_as_text(cell);
+    }
+    typed_cell(cell, &normalized)
+}
+
+/// Declared-type mapping for non-text columns, keyed by the lowercased type.
+// cc-scan:allow COMPLEXITY — one guard per declared type family
+fn typed_cell(cell: UiCell, normalized: &str) -> Option<CellValue> {
     match cell {
         UiCell::Null => Some(CellValue::Null),
         UiCell::Number(value)

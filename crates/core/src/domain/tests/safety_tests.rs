@@ -657,3 +657,129 @@ fn script_safety_sees_statements_after_a_closed_backslash_string() {
         Some(StatementSafety::Read)
     );
 }
+
+// --- #586: BEGIN … END bodies are one statement -------------------------------
+
+#[test]
+fn sqlite_trigger_body_splits_as_one_statement() {
+    let sql = "CREATE TRIGGER trg AFTER INSERT ON t BEGIN UPDATE t SET b = 'x'; SELECT 1; END;";
+    let statements = split_statements_for_driver(sql, DriverType::SQLite);
+    assert_eq!(statements.len(), 1, "{statements:?}");
+    assert!(statements[0].ends_with("END"), "{statements:?}");
+    // The `END` fragment that used to fall out of the splitter read as
+    // transaction control, which is what refused the whole batch (#586).
+    assert_eq!(transaction_control_verb(&statements[0]), None);
+}
+
+#[test]
+fn sqlite_trigger_with_nested_case_and_control_flow_is_one_statement() {
+    let sql = concat!(
+        "CREATE TRIGGER trg AFTER UPDATE ON t BEGIN ",
+        "UPDATE t SET kind = CASE WHEN new.a > 0 THEN 'pos' ELSE 'neg' END; ",
+        "INSERT INTO log(v) SELECT v FROM (SELECT 1 AS v); ",
+        "END; ",
+        "SELECT 1;"
+    );
+    let statements = split_statements_for_driver(sql, DriverType::SQLite);
+    assert_eq!(statements.len(), 2, "{statements:?}");
+    assert_eq!(statements[1], "SELECT 1");
+}
+
+#[test]
+fn temporary_trigger_spelling_opens_a_body() {
+    let sql = "CREATE TEMPORARY TRIGGER trg AFTER INSERT ON t BEGIN INSERT INTO log VALUES (1); END; SELECT 1";
+    let statements = split_statements_for_driver(sql, DriverType::SQLite);
+    assert_eq!(statements.len(), 2, "{statements:?}");
+}
+
+#[test]
+fn postgres_begin_atomic_function_body_is_one_statement() {
+    let sql = "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END; SELECT 3;";
+    let statements = split_statements_for_driver(sql, DriverType::Postgres);
+    assert_eq!(statements.len(), 2, "{statements:?}");
+    assert!(statements[0].contains("SELECT 2"), "{statements:?}");
+}
+
+#[test]
+fn plain_begin_still_does_not_swallow_later_statements() {
+    // A bare `BEGIN;` is transaction control, never a block opener, so the
+    // `END;` that follows still closes the transaction as its own statement.
+    let statements = split_statements("BEGIN; UPDATE t SET a = 1; END;");
+    assert_eq!(statements.len(), 3, "{statements:?}");
+    assert_eq!(transaction_control_verb(&statements[0]), Some("BEGIN"));
+    assert_eq!(transaction_control_verb(&statements[2]), Some("END"));
+}
+
+#[test]
+fn create_table_column_named_case_does_not_open_a_block() {
+    let sql = "CREATE TABLE t (case int, if int); SELECT 1";
+    let statements = split_statements(sql);
+    assert_eq!(statements.len(), 2, "{statements:?}");
+}
+
+#[test]
+fn non_create_statements_keep_every_semicolon_boundary() {
+    let statements = split_statements("SELECT 'a;b'; INSERT INTO t VALUES (1); SELECT CASE WHEN true THEN 1 ELSE 2 END");
+    assert_eq!(statements.len(), 3, "{statements:?}");
+}
+
+#[test]
+fn body_units_keep_a_trigger_body_whole() {
+    let trigger = "CREATE TRIGGER trg AFTER INSERT ON t BEGIN UPDATE t SET b = 'x'; INSERT INTO log VALUES (1); END";
+    let units = split_statement_body_for_driver(trigger, DriverType::SQLite);
+    assert_eq!(units.len(), 3, "{units:?}");
+    assert!(units[0].starts_with("CREATE TRIGGER"));
+    assert_eq!(units[1], "INSERT INTO log VALUES (1)");
+    assert_eq!(units[2], "END");
+}
+
+#[test]
+fn body_units_leave_a_plain_statement_untouched() {
+    let sql = "SELECT 1; SELECT 2";
+    assert_eq!(split_statement_body_for_driver(sql, DriverType::SQLite), vec![sql.to_owned()]);
+}
+
+#[test]
+fn body_units_split_after_a_closed_case_expression() {
+    let trigger = concat!(
+        "CREATE TRIGGER trg AFTER INSERT ON t BEGIN ",
+        "UPDATE t SET kind = CASE WHEN new.a > 0 THEN 'pos' ELSE 'neg' END; ",
+        "INSERT INTO log VALUES (1); ",
+        "END"
+    );
+    let units = split_statement_body_for_driver(trigger, DriverType::SQLite);
+    assert_eq!(units.len(), 3, "{units:?}");
+    assert!(units[0].ends_with("ELSE 'neg' END"), "{units:?}");
+    assert_eq!(units[1], "INSERT INTO log VALUES (1)");
+    assert_eq!(units[2], "END");
+}
+
+#[test]
+fn select_with_row_lock_is_not_a_read() {
+    // A read-only connection must not be able to hold row locks (#588).
+    for sql in [
+        "SELECT * FROM users FOR UPDATE",
+        "SELECT * FROM users FOR NO KEY UPDATE",
+        "SELECT * FROM users FOR SHARE",
+        "SELECT * FROM users FOR KEY SHARE",
+        "SELECT id FROM (SELECT id FROM users FOR UPDATE) locked",
+    ] {
+        assert_eq!(classify_statement_safety(sql), Some(StatementSafety::Write), "{sql}");
+    }
+    assert_eq!(
+        classify_statement_safety("SELECT * FROM users WHERE name = 'for update'"),
+        Some(StatementSafety::Read)
+    );
+    assert_eq!(
+        classify_statement_safety("SELECT * FROM users ORDER BY id"),
+        Some(StatementSafety::Read)
+    );
+}
+
+#[test]
+fn begin_atomic_keeps_the_function_body_together() {
+    let sql = "CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END;";
+    let statements = split_statements_for_driver(sql, DriverType::Postgres);
+    assert_eq!(statements.len(), 1, "{statements:?}");
+    assert_eq!(transaction_control_verb(&statements[0]), None);
+}
