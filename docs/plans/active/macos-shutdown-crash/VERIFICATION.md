@@ -147,9 +147,35 @@ No new artifacts produced by this investigation. Evidence referenced here is the
 run must drop its crash-report listings and exit-status transcript into
 `docs/plans/active/macos-shutdown-crash/runs/<date>/` with the `runs.gitignore` template.
 
+## M2 code landing (Linux host — not runtime evidence)
+
+M2 helper `crates/native-app/src/macos_quit.rs` intercepts root-window
+`close_requested` in `NativeMenuApp::logic` and `CaptureApp::logic`, sends
+`ViewportCommand::CancelClose`, and on macOS schedules `-[NSApplication terminate:]`
+on the main queue. Cmd+Q (`PredefinedMenuItem::quit`) is unchanged.
+`enable_accesskit()` is unchanged. eframe remains 0.36.2. No `process::exit` on
+this path.
+
+TDD on this Linux host (`cargo +1.95.0 test -p db-pro-native`):
+
+```text
+RED:  compile failed — missing macos_quit.rs / macos_close_uses_terminate /
+      take_over_macos_close (5 errors).
+GREEN: tests::macos_close_uses_terminate_not_process_exit
+       tests::macos_close_request_cancels_window_teardown_for_terminate
+       tests::macos_close_respects_cancel_close_already_queued
+       → 3 passed. Full `db-pro-native` suite: 49 passed.
+```
+
+**Mac runtime: BLOCKED.** This host cannot execute `-[NSApplication terminate:]`
+or reproduce NSTouchBarFinder. Do not treat the Linux tests as acceptance.
+PLAN.md § Acceptance (red button × N, exit 0, no `NSRangeException`, theme +
+history after relaunch) remains unverified. SHA of the landing commit belongs
+in a later host run under `runs/<date>/`.
+
 ## Completion decision
 
-Not COMPLETED and not REVIEW. The plan stays `BLOCKED` under FEATURE_LIFECYCLE.md because
-an external dependency (macOS Touch-Bar-class hardware, plus a compile gate we do not have
-on Linux) stands between the established root cause and a verified fix. R-01 must remain a
+M2 **code** has landed; the plan stays `BLOCKED` under FEATURE_LIFECYCLE.md
+because Mac Touch-Bar-class runtime evidence is still missing. R-01 remains a
 release blocker until a host run satisfies the acceptance criteria in PLAN.md.
+Linux results above are **not** a runtime PASS.

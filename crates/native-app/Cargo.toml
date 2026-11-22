@@ -21,7 +21,7 @@ db-pro-core = { path = "../core" }
 db-pro-app = { path = "../app" }
 db-pro-ui = { path = "../ui" }
 db-pro-runtime = { path = "../runtime" }
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit", "persistence"] }
 # Already in the lock file as an `eframe` dependency, so `--locked --offline` works.
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 tokio.workspace = true
@@ -40,3 +40,8 @@ muda = { version = "0.20", default-features = false }
 # file as an eframe dependency). default-features off: text only, skips the
 # image-data feature's extra image/graphics crates.
 arboard = { version = "3.6", default-features = false }
+# Already in Cargo.lock via eframe/winit. Used to schedule `-[NSApplication terminate:]`
+# on window close (R-01 M2) so AccessKit does not re-class WinitView under KVO.
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std"] }
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder"] }

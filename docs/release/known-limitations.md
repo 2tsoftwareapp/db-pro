@@ -20,6 +20,10 @@
 > Further addition (2026-09-15, #244): **LIM-020 added** — PostgreSQL restore is not transactional and backup/restore cannot be cancelled. No entry was deleted or rewritten.
 > Further addition (2026-09-15, #242): **LIM-019 added** — the AI features are the app's only egress and the in-app/release disclosure for it. No entry was deleted or rewritten.
 > Further addition (2026-10-26, release-gap close-out): **LIM-021 added** — the macOS shutdown crash (R-01), root-caused to `accesskit_macos` and recorded as **Fix before v0.1**, the first non-zero entry in that status; **LIM-022 added** — the 838 logical-px capture cap is a macOS host constraint, not product behaviour (Linux/Xvfb returns 1440×900 and 1920×1080 exactly). Closed items from the same wave are deliberately **not** entered here: the SSH-tunnel option-injection fix (`754980dc`), the query-history credential masking (`0a2418d9`) and the missing LICENSE/notices in the macOS archive (`ef2197b4`) are fixed, not limitations. No entry was deleted or rewritten.
+> Correction (v0.1.0 closeout): **LIM-002 rewritten to match current code**, not the 2026-09-15
+> snapshot. MySQL and SQL Server UI driver cards are selectable (`DRIVER_CARD_SPECS` `is_disabled:
+> false`). `DatabaseCapabilities::mysql` advertises a shipping binder/dialect/query path, not
+> Postgres-equivalent coverage. No entry was deleted.
 > Issue: #135
 > Supports: #27, #30, #105, #110, #111
 
@@ -39,41 +43,40 @@ Each entry includes:
 
 ---
 
-## LIM-001: Public name unresolved
+## LIM-001: Public name retained (HD-009)
 
 | Field | Value |
 |---|---|
 | Category | brand |
 | Actual behavior | App is named "DB Pro" with identifier `com.dbpro.app`; name collision with existing dbpro.app product |
-| User-visible impact | Public release under current name carries legal/branding risk |
-| Reason | Name decision pending (#101, #104); competitive research (#137-#141) informs the decision |
-| Status | Blocked decision |
+| User-visible impact | Public release ships as DB Pro. Brand collision with dbpro.app remains an accepted risk (HD-009). |
+| Reason | HD-009 (decided 2026-09-16): retain DB Pro. No source rename, storage migration, or repository rename. |
+| Status | Accepted v0.1 |
 | Target issue | #101, #104 |
-| Safe release-note wording | "DB Pro (working title)" or omit product name |
-| Must not contradict | README, app title bar, installer metadata, website |
-| Evidence | #137 dbpro.app teardown; native literals `with_title("DB Pro")` in `crates/native-app/src/main.rs` (three occurrences, no icon resource and no `Info.plist` in-repo — the packaging script generates a minimal plist). Register: `R001` (disposition `DEFERRED`) |
+| Safe release-note wording | "DB Pro" |
+| Must not contradict | README, app title bar, installer metadata, website (identity is DB Pro) |
+| Evidence | HD-009 retain DB Pro. Native literals `with_title("DB Pro")` in `crates/native-app/src/main.rs`. Register: `R001`. |
 
-## LIM-002: PostgreSQL, SQLite, and a post-v0.1 MySQL 8 provider
+## LIM-002: MySQL/SQL Server shipped with capability gaps
 
 | Field | Value |
 |---|---|
 | Category | connection |
-| Actual behavior | **PostgreSQL and SQLite are the shipped drivers.** MySQL 8 also has a real provider on `main` (connector, class-aware decoder, introspection, factory registration) with recorded live evidence, but it is **not a shipped v0.1 driver**: it has no parameter binder, no dialect arm, and its driver card in the UI is disabled |
-| User-visible impact | In the shipped build, MySQL, MariaDB, SQL Server, Oracle, etc. cannot be connected. The MySQL provider on `main` is reachable from tests and the runtime, not from the UI |
-| Reason | v0.1 scope decision for the shipped product; MySQL is the first post-v0.1 engine (parent goal #182, issues #234/#235) and is being landed incrementally behind the provider contract |
-| Status | Accepted v0.1 (the shipped-driver restriction is unchanged; the MySQL provider's own level is stated under Actual behavior and in the note below) |
-| Target issue | #234 (provider SDK/capability contract), #235 (MySQL 8 provider) |
-| Safe release-note wording | "Supports PostgreSQL and SQLite" |
-| Must not contradict | README, feature list, marketing |
-| Evidence | `crates/core/src/domain/connection.rs` `DriverType` (Postgres, SQLite, Mysql); MySQL provider `crates/infrastructure/src/mysql/` with live evidence `docs/release/evidence/v01-runtime/providers/60-mysql-live-fixture-and-mapper.md`; capability set with the MySQL gaps advertised as `false` in `crates/core/src/domain/capabilities.rs` (`DatabaseCapabilities::mysql`); UI driver card still disabled (`crates/ui/src/connection_view.rs`); contract recorded in `docs/architecture/provider-contract.md` |
+| Actual behavior | **Four drivers are UI-selectable:** PostgreSQL, SQLite, MySQL 8, and SQL Server (`crates/app/src/connection/config.rs` `DRIVER_CARD_SPECS`; MySQL and SQL Server `is_disabled: false`). They are **not** equivalent. `DatabaseCapabilities::mysql` advertises query `multi_statement`/`explain`/`cancel`/`parameters`/`positional_parameters` (not numbered `$n`); schema browsing and most column/table mutations; data insert/update/delete, composite PK, JSON/BLOB/generated columns; `schema_diff`/`data_diff`. It advertises **false** for numbered parameters, ILIKE/GLOB, trigger enable/disable, sequences, UUID/array types, `rename_objects`, `routine_debug`, `transactional_ddl`, `server_sessions`, `partitions`, `tablespaces`, `object_dependencies`, `ssh_tunnel`, and `backup`. MariaDB/Oracle/etc. remain coming-soon (`driver: None`, `is_disabled: true`). **Parameterized transactions do not join the query-tab session lease:** `MySqlConnector::execute_parameterized_transaction` uses a pool `begin()` on its own connection. A prepared `BEGIN`/`SAVEPOINT` on the MySQL wire is refused (`ERROR 1295 (HY000): This command is not supported in the prepared statement protocol yet`), so a query-tab `BEGIN` cannot share a session with staged mutations. |
+| User-visible impact | Users can create, test, and connect MySQL and SQL Server from the connection dialog. Features gated false stay hidden or refused. A MySQL query tab that runs `BEGIN` does not hold the same session as parameterized table mutations; those mutations run on a separate pool transaction. Coming-soon cards stay disabled. |
+| Reason | Providers landed behind the capability contract (#234/#235 and the TDS adapter). Shipping the UI cards does not make MySQL a PostgreSQL clone. The 1295 prepared-protocol gap is measured; joining the lease would emit SQL the server refuses. |
+| Status | Accepted v0.1 (capability gaps and the 1295 lease split; not “driver disabled”) |
+| Target issue | #234 (capability contract), #235 (MySQL 8 provider) |
+| Safe release-note wording | "MySQL/SQL Server shipped with capability gaps; parameterized tx does not join query-tab lease (ERROR 1295)" |
+| Must not contradict | README, feature list, marketing, `0.1.0-release-notes.md` (must not say only PostgreSQL and SQLite) |
+| Evidence | `DatabaseCapabilities::mysql` in `crates/core/src/domain/capabilities/capability_presets.rs`; UI cards `crates/app/src/connection/config.rs`; factory `CompositeConnector` MySQL/SQL Server; parameterized tx `crates/infrastructure/src/mysql/connector.rs` `execute_parameterized_transaction` (pool `begin`, no query-tab lease join); 1295 evidence `docs/plans/completed/parameterized-transaction-session-lease/FINDINGS.md` |
 
-**What is still missing for MySQL to be a supported driver** (recorded here so this entry is not
-mistaken for "MySQL is supported, just not advertised"): a parameter binder
-(`MySqlConnector::query`/`execute` drop the parameter list, so `parameters` and
-`positional_parameters` are advertised `false`), a `SqlDialect` arm (without it the table-data
-mutation and data-diff paths return a validation error, and `data_diff` is advertised `false`), an
-enabled UI driver card, and the service-level features that remain PostgreSQL-only
-(`server_sessions`, `partitions`, `backup` — all advertised `false` for MySQL).
+**What is still missing for MySQL to match PostgreSQL (not “the driver is disabled”):**
+PostgreSQL-only services (`server_sessions`, `partitions`, `backup`), SSH tunnel, sequences,
+trigger enable/disable, numbered parameters, UUID/array types, transactional DDL, and joining
+parameterized transactions onto a query-tab lease (blocked by **ERROR 1295** on prepared
+`BEGIN`/`SAVEPOINT`). Parameter binding and a `SqlDialect` arm **do** ship (`parameters` /
+`positional_parameters` / `data_diff` true).
 
 ## LIM-003: Row insertion incomplete
 
@@ -361,8 +364,8 @@ enabled UI driver card, and the service-level features that remain PostgreSQL-on
 
 | Status | Count | IDs |
 |---|---|---|
-| Accepted v0.1 | 15 | LIM-002, LIM-003, LIM-005, LIM-006, LIM-007, LIM-011, LIM-013, LIM-014, LIM-015, LIM-016, LIM-017, LIM-018, LIM-019, LIM-020, LIM-022 |
-| Blocked decision | 3 | LIM-001, LIM-009, LIM-010 |
+| Accepted v0.1 | 16 | LIM-001, LIM-002, LIM-003, LIM-005, LIM-006, LIM-007, LIM-011, LIM-013, LIM-014, LIM-015, LIM-016, LIM-017, LIM-018, LIM-019, LIM-020, LIM-022 |
+| Blocked decision | 2 | LIM-009, LIM-010 |
 | Deferred v0.2+ | 3 | LIM-004, LIM-008, LIM-012 |
 | Fix before v0.1 | 1 | LIM-021 |
 
