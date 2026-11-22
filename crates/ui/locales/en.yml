@@ -245,6 +245,8 @@ query:
   save_as_title: "Save Query As"
   export_results_desc: "Write the visible result rows to a file on disk."
   export_format_label: "Format"
+  export_null_label: "NULL values"
+  export_null_empty: "Empty"
   export_output_file: "Output file"
   export_table_name: "Target table"
   export_path_adjusted: "Will be saved as %{path}"

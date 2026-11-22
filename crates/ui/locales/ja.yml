@@ -245,6 +245,8 @@ query:
   save_as_title: "名前を付けて保存"
   export_results_desc: "表示中の結果行をディスク上のファイルに書き出します。"
   export_format_label: "形式"
+  export_null_label: "NULL 値"
+  export_null_empty: "空"
   export_output_file: "出力ファイル"
   export_table_name: "対象テーブル"
   export_path_adjusted: "%{path} として保存されます"

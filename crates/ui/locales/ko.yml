@@ -245,6 +245,8 @@ query:
   save_as_title: "쿼리를 다른 이름으로 저장"
   export_results_desc: "표시된 결과 행을 디스크 파일로 저장합니다."
   export_format_label: "형식"
+  export_null_label: "NULL 값"
+  export_null_empty: "비어 있음"
   export_output_file: "출력 파일"
   export_table_name: "대상 테이블"
   export_path_adjusted: "%{path}(으)로 저장됩니다"

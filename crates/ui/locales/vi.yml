@@ -245,6 +245,8 @@ query:
   save_as_title: "Lưu truy vấn thành"
   export_results_desc: "Ghi các hàng kết quả đang hiển thị ra file."
   export_format_label: "Định dạng"
+  export_null_label: "Giá trị NULL"
+  export_null_empty: "Rỗng"
   export_output_file: "File đầu ra"
   export_table_name: "Bảng đích"
   export_path_adjusted: "Sẽ lưu thành %{path}"

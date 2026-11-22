@@ -7,6 +7,8 @@ pub(crate) struct OverlayState {
     pub(super) export_snapshot: Option<crate::UiQueryResult>,
     pub(super) export_format: ExportFormat,
     pub(super) export_path: String,
+    /// How a NULL cell is spelled in CSV/TSV exports (#612).
+    pub(super) export_null: ExportNullMode,
     /// Target table name used by SqlInsert/SqlCopy exports (#426).
     pub(super) export_table_name: String,
     /// Effective path the overwrite prompt was raised for (#539). A `bool`
@@ -22,6 +24,36 @@ pub(crate) struct OverlayState {
     /// renders the connection delete modal in `draw_overlays`.
     pub(super) saved_query_delete_id: Option<String>,
     pub(super) folder_delete_confirmation: Option<String>,
+}
+
+/// NULL spelling for delimited exports (#612).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ExportNullMode {
+    /// An empty field — what a spreadsheet expects from a CSV.
+    #[default]
+    Empty,
+    /// The word `NULL`.
+    Literal,
+    /// The Postgres `COPY` sentinel, for round-trips (#487).
+    Sentinel,
+}
+
+impl ExportNullMode {
+    pub(crate) fn text(self) -> &'static str {
+        match self {
+            Self::Empty => "",
+            Self::Literal => "NULL",
+            Self::Sentinel => "\\N",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Empty => "Empty",
+            Self::Literal => "NULL",
+            Self::Sentinel => "\\N",
+        }
+    }
 }
 
 impl OverlayState {

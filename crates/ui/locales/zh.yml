@@ -245,6 +245,8 @@ query:
   save_as_title: "另存查询为"
   export_results_desc: "将当前显示的结果行写入磁盘文件。"
   export_format_label: "格式"
+  export_null_label: "NULL 值"
+  export_null_empty: "空"
   export_output_file: "输出文件"
   export_table_name: "目标表"
   export_path_adjusted: "将保存为 %{path}"

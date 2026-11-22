@@ -4752,6 +4752,8 @@ fn test_export_result_writes_escaped_delimited_text() {
         },
         ..Default::default()
     };
+    // #612: NULL spelling is a choice now; this test pins the `\N` sentinel (#487).
+    app.overlay.export_null = crate::app::overlay_state::ExportNullMode::Sentinel;
     app.export_result(&value);
     assert!(!app.overlay.export_open, "the dialog closes after a successful export");
     assert_eq!(app.feedback.runtime_message, format!("Exported 2 rows to {path_text}"));
