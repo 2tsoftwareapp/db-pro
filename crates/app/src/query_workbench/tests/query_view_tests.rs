@@ -186,6 +186,57 @@ mod export_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #616: dialog Export phải thật sự được dựng, không chỉ set cờ. UAT headless
+    /// chỉ đọc được accessibility tree (Screen Recording bị từ chối), nên đây là
+    /// mức kiểm chứng đúng: dialog có node trong tree hay không.
+    #[test]
+    fn export_dialog_is_drawn_into_the_accessibility_tree() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        ctx.enable_accesskit();
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_path: "out.csv".to_owned(),
+                export_format: ExportFormat::Csv,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+
+        let mut labels: Vec<String> = Vec::new();
+        // `Dialog` fades in over a few passes, so drive several frames.
+        for _ in 0..10 {
+            let output = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+                app.draw_export_dialog(ui, Some(&result));
+            });
+            if let Some(update) = output.platform_output.accesskit_update {
+                labels = update
+                    .nodes
+                    .iter()
+                    .filter_map(|(_, node)| node.label().map(str::to_owned))
+                    .collect();
+                if labels.iter().any(|label| label.contains("Export")) {
+                    break;
+                }
+            }
+        }
+        assert!(
+            labels.iter().any(|label| label.contains("Export")),
+            "export dialog never reached the accessibility tree: {labels:?}"
+        );
+    }
+
     #[test]
     fn export_refuses_to_replace_an_existing_file_without_confirmation() {
         let dir = temp_dir("confirm");
