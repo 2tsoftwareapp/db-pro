@@ -1,5 +1,35 @@
 //! Tests for `../query_row_limit.rs` (moved out of the source file).
-    use super::apply_row_limit;
+    use super::{apply_row_limit, effective_row_limit};
+
+    /// #604: the toolbar says "limit N applied" from `effective_row_limit`, while
+    /// the engine runs `apply_row_limit`. The two must agree for every shape, or
+    /// the summary claims a cap the query never had.
+    #[test]
+    fn applied_limit_label_matches_the_sql_that_runs_604() {
+        for (sql, driver) in [
+            ("SELECT * FROM users", "PostgreSQL"),
+            ("SELECT * FROM users", "SQLite"),
+            ("SELECT * FROM users LIMIT 10", "PostgreSQL"),
+            ("UPDATE users SET name = 'x'", "PostgreSQL"),
+            ("SELECT 1; SELECT 2", "PostgreSQL"),
+            ("VALUES (1), (2)", "PostgreSQL"),
+        ] {
+            let effective = effective_row_limit(sql, Some(1_000), driver);
+            let rewritten = apply_row_limit(sql, Some(1_000), driver);
+            let sql_grew = rewritten != sql;
+            assert_eq!(
+                effective.is_some(),
+                sql_grew,
+                "label and SQL disagree for {sql:?} ({driver}): label={effective:?} sql={rewritten:?}"
+            );
+            if let Some(limit) = effective {
+                assert!(
+                    rewritten.contains(&format!("LIMIT {limit}")) || rewritten.contains(&format!("TOP {limit}")),
+                    "capped SQL must carry the announced limit: {rewritten}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn read_statement_gets_limit() {

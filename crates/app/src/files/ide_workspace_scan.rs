@@ -351,11 +351,27 @@ pub(super) fn spawn_task_task(command_line: String, cwd: PathBuf) -> std::io::Re
     let child = std::sync::Arc::new(std::sync::Mutex::new(child));
     let (sender, receiver) = std::sync::mpsc::channel();
     spawn_task_reader(child.clone(), sender.clone());
-    // The reaper must be the only thread that calls `wait()`: a second wait
-    // would race the reader that owns stdout/stderr draining.
+    // The reaper must be the only thread that reaps the child: a second wait
+    // would race the reader that owns stdout/stderr draining. It polls with
+    // `try_wait` and drops the lock between polls — a blocking `wait()` held the
+    // mutex for the whole run, so `kill()` waited for the command to finish and
+    // Cancel froze the frame for as long as the task ran (#579).
     let reaper_child = std::sync::Arc::clone(&child);
     std::thread::spawn(move || {
-        let status = reaper_child.lock().ok().and_then(|mut child| child.wait().ok());
+        let status = loop {
+            let polled = match reaper_child.lock() {
+                Ok(mut child) => match child.try_wait() {
+                    Ok(Some(status)) => Some(status),
+                    Ok(None) => None,
+                    Err(_) => break None,
+                },
+                Err(_) => break None,
+            };
+            if let Some(status) = polled {
+                break Some(status);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         let _ = sender.send(TaskEvent::Exit(status.and_then(|status| status.code())));
     });
     Ok(WorkspaceTaskHandle {

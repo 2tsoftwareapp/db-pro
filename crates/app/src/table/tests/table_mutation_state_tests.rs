@@ -116,3 +116,27 @@
         assert_eq!(filters[1].column, "id");
         assert_eq!(filters[1].value, "7");
     }
+/// #610: the inline-edit banner used to print "INTERNAL · Mutation #1 failed",
+/// which threw away the only actionable text the server sent.
+#[test]
+fn failure_banner_keeps_the_runtime_message_610() {
+    assert_eq!(
+        failure_message("QUERY_FAILED", "operator does not exist: text = uuid"),
+        "operator does not exist: text = uuid",
+        "the real SQL error must survive verbatim"
+    );
+    assert_eq!(
+        failure_message("VALIDATION_ERROR", "row changed by another transaction"),
+        "row changed by another transaction"
+    );
+    let conflict = failure_message("CONFLICT", "0 rows updated");
+    assert!(
+        conflict.starts_with("This row changed or was deleted in the database."),
+        "conflicts still explain themselves: {conflict}"
+    );
+    assert!(conflict.contains("0 rows updated"), "{conflict}");
+    // Only the generic wrapper is shortened for the badge; SQL codes pass through.
+    assert_eq!(normalize_failure_code("INTERNAL_ERROR"), "INTERNAL");
+    assert_eq!(normalize_failure_code("QUERY_FAILED"), "QUERY_FAILED");
+    assert_eq!(normalize_failure_code("CONSTRAINT_VIOLATION"), "CONSTRAINT_VIOLATION");
+}
