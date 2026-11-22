@@ -45,10 +45,12 @@ pub(super) fn build_load_row_command(
 
 impl DbProApp {
     pub(crate) fn draw_table_data(&mut self, ui: &mut egui::Ui, table_name: &str) {
-        // Temporarily move the result out while rendering. The grid mutates
-        // selection/edit state, so borrowing it directly from `self` would
-        // conflict with those updates; moving avoids cloning every frame.
-        let Some(result) = self.table.data_query.result.take() else {
+        // Borrow the shared grid instead of moving it out. A `take()` left the
+        // state empty for the whole frame, so a toolbar action handled during the
+        // same draw (`Export Results`) saw `result == None` and refused with
+        // "Load table data before exporting" (#612 UAT). `Rc::clone` is a
+        // refcount bump (#581), so this is still allocation-free.
+        let Some(result) = self.table.data_query.result.clone() else {
             self.draw_table_data_placeholder(ui, table_name);
             return;
         };
@@ -115,9 +117,6 @@ impl DbProApp {
         self.draw_staged_apply_confirmation(ui);
         self.draw_conflict_dialog(ui, &result);
         self.draw_export_dialog(ui, Some(&result));
-        if self.table.data_query.result.is_none() {
-            self.table.data_query.set_result_handle(result);
-        }
     }
 
     fn draw_table_data_placeholder(&mut self, ui: &mut egui::Ui, table_name: &str) {

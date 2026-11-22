@@ -325,11 +325,6 @@ impl TableDataQueryState {
         self.result = Some(std::rc::Rc::new(result));
     }
 
-    /// Adopt an already-shared result without cloning the grid rows (#581).
-    pub(super) fn set_result_handle(&mut self, result: std::rc::Rc<UiQueryResult>) {
-        self.result = Some(result);
-    }
-
     /// Drop the grid.
     pub(super) fn clear_result(&mut self) {
         self.result = None;
