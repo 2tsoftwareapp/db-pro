@@ -671,3 +671,77 @@ fn preedit_is_visible_to_the_next_frame_without_touching_the_buffer() {
     assert_eq!(text, "", "preedit must not be committed to the buffer");
     assert_eq!(preedit.text, "tiếng Việt");
 }
+
+/// #606: Escape closes the completion popup / snippet field, but it used to eject
+/// the caret from the editor as well, so the next keystroke went nowhere. The
+/// editor installs a focus-lock filter for Escape/Tab while it holds focus.
+#[test]
+fn escape_does_not_drop_editor_focus_606() {
+    use super::bind_editor_widget;
+
+    let ctx = egui::Context::default();
+    DbProTheme::install_fonts(&ctx);
+    let editor_id = egui::Id::new("editor-focus-606-probe");
+    let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 200.0));
+
+    // Pass 1: the editor is focused (auto-focus path).
+    let _ = crate::test_frame::frame(
+        &ctx,
+        egui::RawInput {
+            focused: true,
+            ..Default::default()
+        },
+        |ui| {
+            let _ = bind_editor_widget(ui, editor_id, viewport, true);
+        },
+    );
+    assert_eq!(
+        ctx.memory(|memory| memory.focused()),
+        Some(editor_id),
+        "the editor should own the keyboard after the first pass"
+    );
+
+    // Pass 2: no keys. `set_focus_lock_filter` only stores the filter once the
+    // widget had focus last frame, so one quiet pass arms it.
+    let _ = crate::test_frame::frame(
+        &ctx,
+        egui::RawInput {
+            focused: true,
+            ..Default::default()
+        },
+        |ui| {
+            let _ = bind_editor_widget(ui, editor_id, viewport, false);
+        },
+    );
+    assert_eq!(
+        ctx.memory(|memory| memory.focused()),
+        Some(editor_id),
+        "focus survives a quiet pass"
+    );
+
+    // Pass 3: Escape arrives while it holds focus.
+
+    let escape = egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    };
+    let _ = crate::test_frame::frame(
+        &ctx,
+        egui::RawInput {
+            focused: true,
+            events: vec![escape],
+            ..Default::default()
+        },
+        |ui| {
+            let _ = bind_editor_widget(ui, editor_id, viewport, false);
+        },
+    );
+    assert_eq!(
+        ctx.memory(|memory| memory.focused()),
+        Some(editor_id),
+        "Escape must not eject the caret from the editor (#606)"
+    );
+}
