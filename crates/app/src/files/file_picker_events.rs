@@ -20,6 +20,8 @@ pub(super) fn on_file_picked(
             overlay.restore_input_path = path;
         } else if kind == "export-results" {
             overlay.export_path = path;
+            // #621: a browsed destination is explicit, so it is not re-generated.
+            overlay.export_path_is_default = false;
         } else if kind == "workspace-folder" {
             let folder = std::path::PathBuf::from(path);
             dialog.clear_error();

@@ -265,6 +265,73 @@ mod export_tests {
         assert!(path.contains("results"), "unnamed result falls back to a readable stem: {path}");
     }
 
+    /// #621: đường dẫn do app tự đặt mang timestamp nên phải sinh lại mỗi lần
+    /// mở dialog; nếu giữ nguyên thì lần export sau lại dính prompt ghi đè.
+    #[test]
+    fn export_dialog_refreshes_an_app_generated_path_621() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                export_path: "/tmp/stale-from-last-export.csv".to_owned(),
+                export_path_is_default: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![crate::UiColumn {
+                name: "id".to_owned(),
+                data_type: "int".to_owned(),
+                nullable: false,
+            }],
+            rows: vec![vec![UiCell::Number("1".to_owned())]],
+            row_count: 1,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        assert_ne!(
+            app.overlay.export_path, "/tmp/stale-from-last-export.csv",
+            "a stale app-generated path must be regenerated"
+        );
+        assert!(app.overlay.export_path.ends_with(".csv"), "{}", app.overlay.export_path);
+        assert!(app.overlay.export_path_is_default);
+    }
+
+    /// #621: path người dùng tự gõ/Browse là lựa chọn của họ, không được ghi đè.
+    #[test]
+    fn export_dialog_keeps_a_user_chosen_path_621() {
+        let ctx = egui::Context::default();
+        crate::DbProTheme::install_fonts(&ctx);
+        let mut app = DbProApp {
+            overlay: OverlayState {
+                export_open: true,
+                export_format: ExportFormat::Csv,
+                export_path: "/tmp/my-own-target.csv".to_owned(),
+                export_path_is_default: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = UiQueryResult {
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            duration_ms: 0,
+        };
+        let _ = crate::test_frame::frame(&ctx, egui::RawInput::default(), |ui| {
+            app.draw_export_dialog(ui, Some(&result));
+        });
+
+        assert_eq!(app.overlay.export_path, "/tmp/my-own-target.csv");
+        assert!(!app.overlay.export_path_is_default);
+    }
+
     /// #612: NULL được viết theo lựa chọn — mặc định CSV là ô rỗng, `\N` vẫn
     /// chọn được để round-trip `COPY` (#487).
     #[test]

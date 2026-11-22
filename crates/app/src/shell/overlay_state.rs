@@ -9,6 +9,10 @@ pub(crate) struct OverlayState {
     pub(super) export_path: String,
     /// How a NULL cell is spelled in CSV/TSV exports (#612).
     pub(super) export_null: ExportNullMode,
+    /// `true` while `export_path` came from the dialog's own pre-fill. Such a
+    /// path carries a timestamp, so it is regenerated on every open instead of
+    /// reusing the previous file and raising a pointless overwrite prompt (#621).
+    pub(super) export_path_is_default: bool,
     /// Target table name used by SqlInsert/SqlCopy exports (#426).
     pub(super) export_table_name: String,
     /// Effective path the overwrite prompt was raised for (#539). A `bool`
