@@ -131,11 +131,14 @@ impl DbProApp {
         // #612: a dialog that opens with an empty Output file makes the user
         // invent an absolute path. Pre-fill `~/Downloads/<name>_<timestamp>` and
         // let them overwrite it; the extension follows the chosen format.
-        if self.overlay.export_path.trim().is_empty() {
+        // #621: a pre-filled path carries a timestamp, so it must be regenerated
+        // on the next open. A path the user typed or browsed to is kept.
+        if self.overlay.export_path.trim().is_empty() || self.overlay.export_path_is_default {
             self.overlay.export_path = default_export_path(
                 self.overlay.export_table_name.trim(),
                 self.overlay.export_format,
             );
+            self.overlay.export_path_is_default = true;
         }
         let result = self.overlay.export_snapshot.clone();
         // COPY … FROM stdin is a PostgreSQL script; hide it for other drivers and

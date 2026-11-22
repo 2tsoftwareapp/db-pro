@@ -179,6 +179,8 @@ impl ExportDialogContext<'_> {
         // #539: a path typed after the prompt appeared is a different destination.
         if self.overlay.export_path != path_before {
             self.overlay.export_overwrite_pending = None;
+            // #621: an edited path is the user's choice and survives the next open.
+            self.overlay.export_path_is_default = false;
         }
         self.draw_effective_path_hint(ui);
         if matches!(self.overlay.export_format, ExportFormat::SqlInsert | ExportFormat::SqlCopy) {
